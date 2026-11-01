@@ -70,6 +70,8 @@ env:
   secret:
     - RAILS_MASTER_KEY
   clear:
+    # RAILS_HOST: app.yourdomain.com   # required; production refuses to boot without it
+
     # Outbound mail: the server here, its login in credentials (smtp.user_name, smtp.password).
     # Production refuses to boot without both. Recipes: /docs/developer/deployment.
     SMTP_ADDRESS: smtp.postmarkapp.com
