@@ -76,6 +76,23 @@ RSpec.describe "the deployment guide" do
     expect(uses).to all(satisfy { |action, comment| action.match?(/@\h{40}\z/) && comment.match?(/# v\d/) })
   end
 
+  it "names only backup tasks that exist" do
+    require "rake"
+    RakeTasks.load_once
+    named = guide.scan(/bin\/rails '?(backup:\w+)/).flatten.uniq
+
+    expect(named).to include("backup:now", "backup:status", "backup:restore")
+    expect(named.reject { |task| Rake::Task.task_defined?(task) }).to be_empty
+  end
+
+  it "has every section the production preflight points to" do
+    sections = Rails.root.join("config/initializers/required_production_config.rb").read.scan(%r{/docs/developer/deployment \((.+?) section\)}).flatten
+    headings = guide.scan(/^#+ (?:\d+\. )?(.+)$/).flatten
+
+    expect(sections).to include("Back up the database")
+    expect(sections - headings).to be_empty
+  end
+
   it "links only to headings it has" do
     ids = Commonmarker.to_html(guide, options: { extension: { header_ids: "", front_matter_delimiter: "---" } }).scan(/id="([^"]+)"/).flatten
 

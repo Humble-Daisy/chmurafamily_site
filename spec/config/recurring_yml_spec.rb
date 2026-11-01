@@ -21,6 +21,13 @@ RSpec.describe "config/recurring.yml", type: :config do
     expect(entry["schedule"]).to match(/every 12 hours/i)
   end
 
+  it "backs up the database every hour" do
+    entry = production.fetch("database_backup")
+    expect(entry["class"]).to eq("DatabaseBackupJob")
+    expect(entry["queue"]).to eq("default")
+    expect(entry["schedule"]).to eq("every hour")
+  end
+
   it "preserves the existing solid-queue clear-finished-jobs schedule" do
     entry = production.fetch("clear_solid_queue_finished_jobs")
     expect(entry["command"]).to include("SolidQueue::Job.clear_finished_in_batches")

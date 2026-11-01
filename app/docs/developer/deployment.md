@@ -72,8 +72,11 @@ Rent a Linux server (a current Ubuntu LTS image works) and note whether it is
   Only when the fingerprints match, add `server.known_hosts` to your
   `~/.ssh/known_hosts`. Keep the file: CI needs it in
   [step 6](#6-deploy-from-ci). A staging server gets its own.
-- **Somewhere for backups**, chosen before there is data to lose
-  ([Storage volumes](#storage-volumes)).
+- **A bucket for backups.** The app backs its database up every hour to any
+  S3-compatible bucket, and production refuses to boot without one. Create
+  the bucket with a different company from your server's, plus a key for it
+  and a rule that deletes backups after 30 days
+  ([Back up the database](#back-up-the-database)).
 
 Check: `ssh root@<server-ip> docker version` prints the server's Docker
 version, and `ssh -o PubkeyAuthentication=no root@<server-ip>` is refused with
@@ -104,12 +107,18 @@ builder:
 env:
   clear:
     RAILS_HOST: app.yourdomain.com
+    OBJECT_STORAGE_BUCKET: yourapp-backups
+    OBJECT_STORAGE_REGION: eu-central-003
+    OBJECT_STORAGE_ENDPOINT: https://s3.eu-central-003.backblazeb2.com
 ```
 
 - **`proxy:`** turns on HTTPS. A deploy without it reports healthy while
   nobody can reach the site ([SSL configuration](#ssl-configuration-paired-changes-required)).
 - **`RAILS_HOST`** is the host every email link is built from. Production
   refuses to boot without it ([Production preflight](#production-preflight)).
+- **`OBJECT_STORAGE_*`** name the backup bucket from step 1. The region and
+  endpoint depend on the provider; [Back up the database](#back-up-the-database)
+  lists them.
 - **`registry:`** stays as shipped. `localhost:5555` is Kamal's local
   registry: Kamal runs a registry on the machine doing the deploy, and the
   server pulls the new image from it through the deploy's SSH connection. No
@@ -129,8 +138,16 @@ haven't made the production credentials yet, do it now
 
 1. `bin/rails credentials:edit --environment production` creates the key and
    the encrypted file.
-2. Paste in the block `bin/rails db:encryption:init` prints. Production
-   refuses to boot without it.
+2. Paste in the block `bin/rails db:encryption:init` prints, and the backup
+   bucket's key from step 1:
+
+   ```yaml
+   object_storage:
+     access_key_id: ...
+     secret_access_key: ...
+   ```
+
+   Production refuses to boot without either.
 3. Commit `config/credentials/production.yml.enc`. Kamal builds the image from
    a clone of the commit, so anything uncommitted never reaches the server; the
    key stays out of git.
@@ -317,7 +334,13 @@ bin/kamal deploy    # Every deploy after
 CI verifies your production image builds on every pull request that touches a build input (the `image_scan` workflow's cold build) and on every push to `main` (the `docker_build` workflow; see [Getting Started](/docs/developer/getting-started)), and the pre-push hook runs the same build locally when you change one, so the first time you run `kamal deploy` you're not also debugging Dockerfile issues.
 
 Check: `curl -s -o /dev/null -w '%{http_code}\n' https://app.yourdomain.com/up`
-prints `200`, and the site loads in a browser.
+prints `200`, and the site loads in a browser. Then take the first backup by
+hand instead of waiting for the hour:
+
+```bash
+bin/kamal app exec "bin/rails backup:now"      # prints the backup it uploaded
+bin/kamal app exec "bin/rails backup:status"   # names the latest
+```
 
 For staging, set its host in `config/deploy.staging.yml`, then
 `bin/kamal setup -d staging` and `bin/kamal deploy -d staging`.
@@ -367,6 +390,84 @@ branch's latest push.
 The runner reaches the server the way your laptop does, over SSH open to the
 internet with keys only. If SSH is reachable only over a private network, the
 runner joins that network first: [SSH over a private network](#ssh-over-a-private-network).
+
+## Back up the database
+
+Every hour, `DatabaseBackupJob` copies the primary database with SQLite's own
+`VACUUM INTO`, which takes a consistent copy while the app keeps writing,
+checks the copy with SQLite's integrity check, compresses it, and uploads it
+to the `object_storage` bucket. A dead disk or a bad migration costs at most
+the last hour.
+
+- **Backed up:** `storage/production.sqlite3`, which holds every account,
+  workspace and record.
+- **Not needed:** the cache and cable databases, which rebuild themselves.
+- **An accepted loss:** the queue database. Jobs waiting at the moment of a
+  disaster are lost; recurring ones run again on schedule.
+- **Not yet:** uploaded files on the storage volume. Moving them into the same
+  bucket is the next change.
+- **The key that opens them:** a backup decrypts only with `production.key`,
+  so keep that key in your password manager, off the server.
+
+### The bucket
+
+Any S3-compatible provider works. Pick one that isn't your server's provider,
+so one company's outage or account trouble can't take both.
+
+| Provider | `OBJECT_STORAGE_REGION` | `OBJECT_STORAGE_ENDPOINT` |
+| --- | --- | --- |
+| Backblaze B2 | the bucket's region, such as `eu-central-003` | `https://s3.<region>.backblazeb2.com` |
+| Cloudflare R2 | `auto` | `https://<account-id>.r2.cloudflarestorage.com` |
+| Hetzner Object Storage | the location, such as `fsn1` | `https://<location>.your-objectstorage.com` |
+| Amazon S3 | the bucket's region, such as `eu-central-1` | leave it unset |
+
+A server you run yourself, such as Garage, usually also needs
+`OBJECT_STORAGE_FORCE_PATH_STYLE: "true"`.
+
+- **The key:** scope it as narrowly as the provider allows, to this one bucket
+  and, where the provider can, without permission to delete. The app only
+  uploads and downloads, so a key taken from the server can't erase the
+  history.
+- **Retention:** give the bucket a lifecycle rule that deletes objects under
+  `backups/` after 30 days, or whatever window you want. The bucket deletes old
+  backups, not the app, which is what lets the key go without delete
+  permission.
+
+Each backup is `backups/<deployment>/<time>.sqlite3.gz`, and
+`backups/<deployment>/latest` names the newest. The deployment is
+`production`, or the credentials a deploy runs on (`staging`), so staging can
+share the bucket without touching production's backups.
+
+### Check it runs
+
+`bin/kamal app exec "bin/rails backup:status"` names the latest backup, and
+its time should be under an hour old. A backup that fails is a failed
+`DatabaseBackupJob`; the next hour tries again.
+
+### Restore
+
+A restore replaces the live database, so the app stops for it:
+
+```bash
+bin/kamal app stop
+bin/kamal app exec "bin/rails backup:restore"   # the latest backup
+bin/kamal app start
+```
+
+To go further back, name a backup from the bucket's listing:
+
+```bash
+bin/kamal app exec "bin/rails 'backup:restore[backups/production/2026-11-01T140005Z.sqlite3.gz]'"
+```
+
+The restore checks the backup with SQLite's integrity check before it touches
+anything, then moves the current database aside, with its WAL files, as
+`production.sqlite3.before-restore-<time>`, so a restore can itself be undone.
+Delete that file once you're sure.
+
+**Practise a restore before you need one.** Run it once on staging or a
+throwaway server, and write down the date. A backup nobody has restored is
+a hope, not a backup.
 
 ## More than one person deploys
 
@@ -685,9 +786,10 @@ proxy:
 With `ssl: false`, kamal-proxy forwards `X-Forwarded-Proto`, and the shipped
 Rails settings stay as they are ([SSL configuration](#ssl-configuration-paired-changes-required)).
 
-**Its data is backed up elsewhere.** The [storage volume](#storage-volumes)
-lives on the host's Linux filesystem, a separate machine pulls the backups,
-and a restore has been tested.
+**Its data is backed up off the host.** The hourly backups go to a bucket
+with a provider elsewhere ([Back up the database](#back-up-the-database)). A
+bucket on the same host, such as Garage, can hold a second copy, never the
+only one, since it dies with the host. A restore has been tested.
 
 **Images are built for its architecture.** When the machine running Kamal
 differs, as GitHub's x86 runners do from an arm64 host, either build on the
@@ -806,7 +908,7 @@ Steps 2 and 5 of [First deploy](#first-deploy) cover these:
 
 ## Production preflight
 
-`config/initializers/required_production_config.rb` refuses to boot a production process when `RAILS_HOST` is unset or still a placeholder (`example.com`, anything ending in `.example`), when `SMTP_ADDRESS` is unset, `localhost` or a placeholder, or the credentials' `smtp.user_name` or `smtp.password` is blank (see [Configure outbound mail](#4-configure-outbound-mail)), or when the Active Record encryption keys are missing from the production credentials. The reason it refuses rather than warns: every mailer link — magic links, password resets, invitations — is generated from `RAILS_HOST`, and DNS-rebinding protection (`config.hosts`) is derived from it. With a placeholder value the app boots, `/up` reports healthy, and nobody can sign in. Missing encryption keys fail the same way — healthy `/up`, then the first read of a user raises. A failed boot is the only version of either failure you can see. Keys: `bin/rails db:encryption:init`, pasted into `bin/rails credentials:edit --environment production` ([Forking](/docs/developer/forking#bootstrap-secrets-and-configuration)).
+`config/initializers/required_production_config.rb` refuses to boot a production process when `RAILS_HOST` is unset or still a placeholder (`example.com`, anything ending in `.example`), when `SMTP_ADDRESS` is unset, `localhost` or a placeholder, or the credentials' `smtp.user_name` or `smtp.password` is blank (see [Configure outbound mail](#4-configure-outbound-mail)), when the Active Record encryption keys are missing from the production credentials, or when no backup bucket is configured ([Back up the database](#back-up-the-database)). The reason it refuses rather than warns: every mailer link — magic links, password resets, invitations — is generated from `RAILS_HOST`, and DNS-rebinding protection (`config.hosts`) is derived from it. With a placeholder value the app boots, `/up` reports healthy, and nobody can sign in. Missing encryption keys fail the same way — healthy `/up`, then the first read of a user raises. A failed boot is the only version of either failure you can see. Keys: `bin/rails db:encryption:init`, pasted into `bin/rails credentials:edit --environment production` ([Forking](/docs/developer/forking#bootstrap-secrets-and-configuration)).
 
 Rules the guard follows:
 
@@ -842,7 +944,7 @@ This holds:
 - Solid Cable (`storage/production_cable.sqlite3`)
 - Active Storage file uploads (if you use disk storage)
 
-**Back this volume up off-server.** Losing it loses your entire app state. The recommended pattern is a periodic snapshot of `/var/lib/docker/volumes/modelrails_base_storage/_data` to S3-compatible storage. Migrating off SQLite to a networked DB only solves part of this — Active Storage attachments still live here unless you also configure S3 storage.
+Losing it loses your entire app state. The primary database is backed up every hour ([Back up the database](#back-up-the-database)); uploaded files on this volume are not yet, and copying a live SQLite file with `cp` is not a backup.
 
 ## File serving is already offloaded — don't configure X-Sendfile
 

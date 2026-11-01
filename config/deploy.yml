@@ -72,6 +72,11 @@ env:
   clear:
     # RAILS_HOST: app.yourdomain.com   # required; production refuses to boot without it
 
+    # Hourly database backups go to this S3-compatible bucket; its key lives in credentials (object_storage.*).
+    OBJECT_STORAGE_BUCKET: ""
+    OBJECT_STORAGE_REGION: ""
+    # OBJECT_STORAGE_ENDPOINT: https://s3.eu-central-003.backblazeb2.com   # any provider but AWS
+
     # Outbound mail: the server here, its login in credentials (smtp.user_name, smtp.password).
     # Production refuses to boot without both. Recipes: /docs/developer/deployment.
     SMTP_ADDRESS: smtp.postmarkapp.com

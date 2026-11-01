@@ -22,4 +22,14 @@ RSpec.describe DeployCredentials do
         .to raise_error(ArgumentError, /RAILS_CREDENTIALS_ENV/)
     end
   end
+
+  describe ".deployment" do
+    it "names a deploy after its credentials, so staging and production keep their backups apart" do
+      expect(described_class.deployment({ "RAILS_CREDENTIALS_ENV" => "staging" })).to eq("staging")
+    end
+
+    it "falls back to the Rails environment" do
+      expect(described_class.deployment({})).to eq(Rails.env)
+    end
+  end
 end

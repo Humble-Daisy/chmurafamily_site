@@ -6,8 +6,10 @@ load Rails.root.join("config/initializers/required_production_config.rb").to_s u
 
 RSpec.describe RequiredProductionConfig do
   describe ".check!" do
-    let(:mail) { { "SMTP_ADDRESS" => "smtp.postmarkapp.com" } }
-    let(:smtp) { { smtp: { user_name: "token", password: "token" } } }
+    let(:backups) { { "OBJECT_STORAGE_BUCKET" => "app-backups", "OBJECT_STORAGE_REGION" => "auto" } }
+    let(:storage) { { object_storage: { access_key_id: "id", secret_access_key: "secret" } } }
+    let(:mail) { { "SMTP_ADDRESS" => "smtp.postmarkapp.com", **backups } }
+    let(:smtp) { { smtp: { user_name: "token", password: "token" }, **storage } }
 
     it "raises when RAILS_HOST is unset" do
       expect { described_class.check!({}) }
@@ -133,6 +135,35 @@ RSpec.describe RequiredProductionConfig do
         expect(e.message).to include("db:encryption:init")
         expect(e.message).to include("credentials:edit --environment production")
         expect(e.message).to include("/docs/developer/forking")
+      end
+    end
+
+    describe "database backups" do
+      let(:ready) { { "RAILS_HOST" => "app.humbledaisy.com", "SMTP_ADDRESS" => "smtp.postmarkapp.com" } }
+      let(:login) { { smtp: { user_name: "token", password: "token" } } }
+
+      it "raises when no bucket is named" do
+        expect { described_class.check!(ready.merge(backups.except("OBJECT_STORAGE_BUCKET")), login.merge(storage)) }
+          .to raise_error(RuntimeError, /OBJECT_STORAGE_BUCKET is unset/)
+      end
+
+      it "raises when no region is named" do
+        expect { described_class.check!(ready.merge(backups.except("OBJECT_STORAGE_REGION")), login.merge(storage)) }
+          .to raise_error(RuntimeError, /OBJECT_STORAGE_REGION is unset/)
+      end
+
+      it "raises when the bucket's key is missing from the credentials" do
+        expect { described_class.check!(ready.merge(backups), login) }
+          .to raise_error(RuntimeError, /object_storage\.access_key_id and object_storage\.secret_access_key are unset/)
+      end
+
+      it "names the fix, the doc and the opt-out in the message" do
+        described_class.check!(ready, login)
+        raise "expected check! to raise"
+      rescue RuntimeError => e
+        expect(e.message).to include("credentials:edit --environment production")
+        expect(e.message).to include("/docs/developer/deployment")
+        expect(e.message).to include("git rm config/initializers/required_production_config.rb")
       end
     end
   end

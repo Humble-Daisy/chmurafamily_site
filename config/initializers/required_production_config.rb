@@ -21,7 +21,37 @@ module RequiredProductionConfig
     check_host!(env)
     check_mail!(env, credentials)
     check_encryption_keys!(credentials, encryption)
+    check_backups!(env, credentials)
   end
+
+  def self.check_backups!(env, credentials)
+    problem = backups_problem(env, credentials) or return
+
+    raise <<~MSG
+      Production preflight failed: #{problem}.
+
+      The database is backed up every hour to an S3-compatible bucket. Without one,
+      the app boots, /up reports healthy, and a lost disk takes every account with it.
+
+      Fix: create a bucket and a key for it, then
+        - OBJECT_STORAGE_BUCKET and OBJECT_STORAGE_REGION (and OBJECT_STORAGE_ENDPOINT
+          for anything but AWS): under env.clear in config/deploy.yml (Kamal), or the environment
+        - object_storage.access_key_id and object_storage.secret_access_key:
+          bin/rails credentials:edit --environment production, then redeploy
+
+      Details: /docs/developer/deployment (Back up the database section).
+      Opting out for good: git rm config/initializers/required_production_config.rb
+    MSG
+  end
+
+  def self.backups_problem(env, credentials)
+    unset = %w[OBJECT_STORAGE_BUCKET OBJECT_STORAGE_REGION].find { |name| env[name].to_s.strip.empty? }
+    return "#{unset} is unset" if unset
+
+    blank = %i[access_key_id secret_access_key].select { |key| credentials.dig(:object_storage, key).to_s.strip.empty? }.map { |key| "object_storage.#{key}" }
+    "#{blank.to_sentence} #{blank.one? ? "is" : "are"} unset in credentials" if blank.any?
+  end
+  private_class_method :backups_problem
 
   def self.check_mail!(env, credentials)
     problem = mail_problem(env, credentials) or return
