@@ -1,7 +1,7 @@
 ---
 title: Deployment
 description: Deploy ModelRails to production with Kamal — SQLite topology, Solid Queue graduation path, SSL configuration, and the runtime invariants that keep deploys safe.
-keywords: kamal deploy production sqlite solid queue single-host stop_timeout graduation rolling deploy ssl https proxy registry github container preflight rails_host placeholder
+keywords: kamal deploy production self-hosted fnox age secrets sqlite solid queue single-host stop_timeout graduation rolling deploy ssl https proxy registry github container preflight rails_host placeholder
 ---
 
 # Deployment
@@ -106,6 +106,41 @@ real user.
 
 > A root `.env` does **not** reach Kamal. Kamal's dotenv parses its own secrets
 > files, not `.env` — that file is for local Rails only.
+
+#### Encrypting deploy secrets with fnox (optional)
+
+Rails credentials stay the source of truth for what the app reads at runtime;
+nothing here copies them anywhere else. fnox changes how a deploy gets the few
+values outside them, such as a key file's contents or a registry token, once
+copying each one into every CI system and laptop gets old. With its age
+provider, the values sit in the repository as ciphertext. Each operator and
+each unattended runner decrypts them with its own identity, so CI needs one
+secret, `FNOX_AGE_KEY`, instead of one per value.
+
+The template ships no `fnox.toml`, because one would carry another app's
+recipients and ciphertext into every fork. An app that opts in commits its
+own, installs fnox through mise, and reads each value in `.kamal/secrets`
+through command substitution:
+
+```bash
+RAILS_MASTER_KEY=$(fnox get RAILS_MASTER_KEY)
+KAMAL_REGISTRY_PASSWORD=$(fnox get KAMAL_REGISTRY_PASSWORD)
+```
+
+What keeps it safe:
+
+- **Recipients** are each operator's identity plus one per unattended deploy
+  runner, so a runner can be removed on its own.
+- **Write values with `fnox set`.** A value typed into `fnox.toml` by hand
+  isn't encrypted.
+- **Back up private identities in a password manager**, never a repository.
+  Git and Docker already ignore `fnox.local.toml` and `age.txt`.
+- **The deploy host holds no identity.** It receives decrypted values at
+  deploy time, through `env.secret`.
+- **Removing a recipient means `fnox reencrypt` and rotating every secret
+  they could read.** Git history keeps the old ciphertext, and their identity
+  still opens it.
+- **Never print a decrypted value** in a log or CI output.
 
 ### 3. Configure outbound mail
 
@@ -249,6 +284,71 @@ other. Every deploy leaves a deployment record with its commit on the
 repository's Environments page, which is the answer to "what's live?". To make
 the first deploy after switching one on, rerun the skipped run for that
 branch's latest push.
+
+## Deploying to a machine you run
+
+Kamal will deploy to any Linux host it can reach over SSH, including one under
+your desk. A machine you run is a safe target once it meets every item below.
+
+**It comes back on its own.** After a power cut, the chain runs power-on, host
+boot, VM if there is one, Docker, then kamal-proxy and the app containers
+through Docker's restart policies, with nobody logging in. Kamal expects Linux
+running Docker Engine under systemd. A VM is fine if it starts at boot without
+a user session; a desktop container runtime that needs someone logged in is
+not. Prove the chain with a reboot and no login, and again after OS or host
+upgrades. Full-disk encryption that waits for an unlock breaks the chain, so
+choose per host and write down why.
+
+**Its SSH host key never changes unannounced.** Deploys check host keys
+(`SSH_KNOWN_HOSTS`, above), and checking stays on. A cloud-image VM can
+regenerate its keys whenever its instance ID changes; if yours does, pin the
+keys and restore them at every boot. A known-hosts line is a public key, safe
+to commit.
+
+**Management is private.** SSH and deploys arrive over a private network, such
+as WireGuard or Tailscale, never public SSH. The CI deploy identity reaches SSH
+on deploy hosts and nothing else.
+
+**Only HTTP and HTTPS are public**, and the host sits in its own network zone,
+cut off from the rest of your internal network. A third-party tunnel in front
+also works, but it puts that third party in the TLS path.
+
+**One kamal-proxy serves every app on the host**, each routed by its
+`proxy.host`. Its `proxy.run` settings take effect when it boots, so they
+belong to the host: keep them the same in every app that deploys there, and
+coordinate a change, because applying one means `bin/kamal proxy reboot` for
+all of them. When something in front terminates TLS, the proxy runs without
+SSL on other ports:
+
+```yaml
+proxy:
+  ssl: false
+  host: yourdomain.com
+  run:
+    http_port: 8080
+    https_port: 8443
+```
+
+With `ssl: false`, kamal-proxy forwards `X-Forwarded-Proto`, and the shipped
+Rails settings stay as they are ([SSL configuration](#ssl-configuration-paired-changes-required)).
+
+**No decryption identity lives on it** ([fnox](#encrypting-deploy-secrets-with-fnox-optional)).
+
+**Its data is backed up elsewhere.** The [storage volume](#storage-volumes)
+lives on the host's Linux filesystem, a separate machine pulls the backups,
+and a restore has been tested.
+
+**Images are built for its architecture.** `builder.arch` ships as `amd64`;
+set it to the host's. When the machine running Kamal differs, as GitHub's x86
+runners do from an arm64 host, build on the host through `builder.remote` or on
+a runner of the same architecture.
+
+**Self-hosted CI runners, if you use them**, are ephemeral, never run pull
+requests from forks, carry their own decryption identity, and never run on the
+deploy host.
+
+Adding another app to a host that meets all of this is configuration only:
+its own `service`, `proxy.host`, and volume.
 
 ## Production-safety invariants
 
