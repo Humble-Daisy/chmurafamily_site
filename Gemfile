@@ -71,6 +71,8 @@ gem "image_processing", "~> 2.2"
 gem "ruby-vips", require: false
 gem "active_storage_validations"
 gem "activestorage-hotcell-client"
+# The object_storage service in config/storage.yml; without it production can't upload its database backups.
+gem "aws-sdk-s3", "~> 1.0", require: false
 
 group :development, :test do
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem

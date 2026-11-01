@@ -17,11 +17,48 @@ module RequiredProductionConfig
   ENCRYPTION_KEYS = %i[primary_key deterministic_key key_derivation_salt].freeze
 
   def self.check!(env = ENV, credentials = Rails.application.credentials,
-                  encryption = Rails.application.config.active_record.encryption)
+                  encryption = Rails.application.config.active_record.encryption, logger: Rails.logger)
     check_host!(env)
     check_mail!(env, credentials)
     check_encryption_keys!(credentials, encryption)
+    check_backups!(env, credentials, logger)
   end
+
+  def self.check_backups!(env, credentials, logger)
+    if env.values_at("BACKUP_PATH", "OBJECT_STORAGE_BUCKET").all? { |value| value.to_s.strip.empty? }
+      return logger.warn("Backups are off: nothing copies the database or uploaded files anywhere. " \
+        "Set BACKUP_PATH (a folder) or OBJECT_STORAGE_BUCKET (a bucket); /docs/developer/deployment (Back up the database section).")
+    end
+    problem = backups_problem(env, credentials) or return
+
+    raise <<~MSG
+      Production preflight failed: #{problem}.
+
+      A half-configured backup destination boots, /up reports healthy, and every
+      backup fails.
+
+      Fix, either way under env.clear in config/deploy.yml (Kamal), or the environment:
+        - A folder, such as a NAS or a second drive passed in as a volume: BACKUP_PATH,
+          with OBJECT_STORAGE_BUCKET removed
+        - Or finish the bucket: OBJECT_STORAGE_REGION (and OBJECT_STORAGE_ENDPOINT for
+          anything but AWS), plus object_storage.access_key_id and
+          object_storage.secret_access_key in bin/rails credentials:edit --environment production
+
+      Details: /docs/developer/deployment (Back up the database section).
+      Opting out for good: git rm config/initializers/required_production_config.rb
+    MSG
+  end
+
+  def self.backups_problem(env, credentials)
+    path, bucket = env.values_at("BACKUP_PATH", "OBJECT_STORAGE_BUCKET").map { |value| value.to_s.strip }
+    return "BACKUP_PATH and OBJECT_STORAGE_BUCKET are both set; a backup goes to one of them" if path.present? && bucket.present?
+    return if path.present?
+    return "OBJECT_STORAGE_BUCKET is set but OBJECT_STORAGE_REGION is unset" if env["OBJECT_STORAGE_REGION"].to_s.strip.empty?
+
+    blank = %i[access_key_id secret_access_key].select { |key| credentials.dig(:object_storage, key).to_s.strip.empty? }.map { |key| "object_storage.#{key}" }
+    "#{blank.to_sentence} #{blank.one? ? "is" : "are"} unset in credentials" if blank.any?
+  end
+  private_class_method :backups_problem
 
   def self.check_mail!(env, credentials)
     problem = mail_problem(env, credentials) or return

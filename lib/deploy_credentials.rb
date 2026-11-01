@@ -9,4 +9,8 @@ module DeployCredentials
 
     { content_path: root.join("config/credentials/#{name}.yml.enc"), key_path: root.join("config/credentials/#{name}.key") }
   end
+
+  def self.deployment(env = ENV)
+    env["RAILS_CREDENTIALS_ENV"].to_s.strip.presence || Rails.env
+  end
 end

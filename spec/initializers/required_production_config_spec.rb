@@ -6,8 +6,10 @@ load Rails.root.join("config/initializers/required_production_config.rb").to_s u
 
 RSpec.describe RequiredProductionConfig do
   describe ".check!" do
-    let(:mail) { { "SMTP_ADDRESS" => "smtp.postmarkapp.com" } }
-    let(:smtp) { { smtp: { user_name: "token", password: "token" } } }
+    let(:backups) { { "OBJECT_STORAGE_BUCKET" => "app-backups", "OBJECT_STORAGE_REGION" => "auto" } }
+    let(:storage) { { object_storage: { access_key_id: "id", secret_access_key: "secret" } } }
+    let(:mail) { { "SMTP_ADDRESS" => "smtp.postmarkapp.com", **backups } }
+    let(:smtp) { { smtp: { user_name: "token", password: "token" }, **storage } }
 
     it "raises when RAILS_HOST is unset" do
       expect { described_class.check!({}) }
@@ -133,6 +135,48 @@ RSpec.describe RequiredProductionConfig do
         expect(e.message).to include("db:encryption:init")
         expect(e.message).to include("credentials:edit --environment production")
         expect(e.message).to include("/docs/developer/forking")
+      end
+    end
+
+    describe "database backups" do
+      let(:ready) { { "RAILS_HOST" => "app.humbledaisy.com", "SMTP_ADDRESS" => "smtp.postmarkapp.com" } }
+      let(:login) { { smtp: { user_name: "token", password: "token" } } }
+
+      it "boots with backups off, and says so in the log" do
+        logger = instance_double(Logger, warn: nil)
+
+        expect { described_class.check!(ready, login, logger: logger) }.not_to raise_error
+        expect(logger).to have_received(:warn).with(/Backups are off.*BACKUP_PATH/m)
+      end
+
+      it "raises when a bucket is named without its region" do
+        expect { described_class.check!(ready.merge(backups.except("OBJECT_STORAGE_REGION")), login.merge(storage)) }
+          .to raise_error(RuntimeError, /OBJECT_STORAGE_BUCKET is set but OBJECT_STORAGE_REGION is unset/)
+      end
+
+      it "raises when the bucket's key is missing from the credentials" do
+        expect { described_class.check!(ready.merge(backups), login) }
+          .to raise_error(RuntimeError, /object_storage\.access_key_id and object_storage\.secret_access_key are unset/)
+      end
+
+      it "accepts a mounted folder in place of a bucket" do
+        expect { described_class.check!(ready.merge("BACKUP_PATH" => "/backups"), login) }
+          .not_to raise_error
+      end
+
+      it "refuses a folder and a bucket at once, since a backup goes to one place" do
+        expect { described_class.check!(ready.merge(backups, "BACKUP_PATH" => "/backups"), login.merge(storage)) }
+          .to raise_error(RuntimeError, /BACKUP_PATH and OBJECT_STORAGE_BUCKET are both set/)
+      end
+
+      it "names the fix, the doc and the opt-out in the message" do
+        described_class.check!(ready.merge(backups), login)
+        raise "expected check! to raise"
+      rescue RuntimeError => e
+        expect(e.message).to include("credentials:edit --environment production")
+        expect(e.message).to include("/docs/developer/deployment")
+        expect(e.message).to include("git rm config/initializers/required_production_config.rb")
+        expect(e.message).to include("BACKUP_PATH")
       end
     end
   end
