@@ -12,6 +12,8 @@ class DatabaseBackup
       # The bucket's lifecycle rule prunes, so the server's key needs no delete permission.
     end
 
+    def caveat = nil
+
     private
       def service = @service ||= ActiveStorage::Blob.services.fetch(:object_storage)
   end

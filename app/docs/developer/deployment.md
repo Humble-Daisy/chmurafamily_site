@@ -72,11 +72,14 @@ Rent a Linux server (a current Ubuntu LTS image works) and note whether it is
   Only when the fingerprints match, add `server.known_hosts` to your
   `~/.ssh/known_hosts`. Keep the file: CI needs it in
   [step 6](#6-deploy-from-ci). A staging server gets its own.
-- **Somewhere for backups.** The app backs its database up every hour, and
-  production refuses to boot until it has somewhere to put them: an
-  S3-compatible bucket with a different company from your server's, which
-  survives losing the whole site, or a folder on another disk, such as a NAS
-  ([Back up the database](#back-up-the-database)).
+- **A folder for backups.** Once a day the app backs up its database and
+  uploaded files to a folder you name. A folder on the server's own disk is
+  enough to start; a second drive, a NAS, or later a bucket survive more
+  ([Back up the database](#back-up-the-database)):
+
+  ```bash
+  mkdir -p /srv/backups && chown 1000:1000 /srv/backups
+  ```
 
 Check: `ssh root@<server-ip> docker version` prints the server's Docker
 version, and `ssh -o PubkeyAuthentication=no root@<server-ip>` is refused with
@@ -104,22 +107,23 @@ proxy:                       # ships commented out; uncomment it
 builder:
   arch: amd64                # or arm64, to match the server
 
+volumes:
+  - "modelrails_base_storage:/rails/storage"
+  - "/srv/backups:/backups"    # the folder from step 1
+
 env:
   clear:
     RAILS_HOST: app.yourdomain.com
-    OBJECT_STORAGE_BUCKET: yourapp-backups
-    OBJECT_STORAGE_REGION: eu-central-003
-    OBJECT_STORAGE_ENDPOINT: https://s3.eu-central-003.backblazeb2.com
+    BACKUP_PATH: /backups
 ```
 
 - **`proxy:`** turns on HTTPS. A deploy without it reports healthy while
   nobody can reach the site ([SSL configuration](#ssl-configuration-paired-changes-required)).
 - **`RAILS_HOST`** is the host every email link is built from. Production
   refuses to boot without it ([Production preflight](#production-preflight)).
-- **`OBJECT_STORAGE_*`** name the backup bucket from step 1. The region and
-  endpoint depend on the provider; [Back up the database](#back-up-the-database)
-  lists them. Backing up to a folder instead, set `BACKUP_PATH` and leave these
-  out.
+- **`BACKUP_PATH`** is where the folder from step 1 appears inside the
+  container. Without it production still boots, and its log says backups are
+  off ([Back up the database](#back-up-the-database)).
 - **`registry:`** stays as shipped. `localhost:5555` is Kamal's local
   registry: Kamal runs a registry on the machine doing the deploy, and the
   server pulls the new image from it through the deploy's SSH connection. No
@@ -139,16 +143,8 @@ haven't made the production credentials yet, do it now
 
 1. `bin/rails credentials:edit --environment production` creates the key and
    the encrypted file.
-2. Paste in the block `bin/rails db:encryption:init` prints and, if you back
-   up to a bucket, its key from step 1:
-
-   ```yaml
-   object_storage:
-     access_key_id: ...
-     secret_access_key: ...
-   ```
-
-   Production refuses to boot without them.
+2. Paste in the block `bin/rails db:encryption:init` prints. Production
+   refuses to boot without it.
 3. Commit `config/credentials/production.yml.enc`. Kamal builds the image from
    a clone of the commit, so anything uncommitted never reaches the server; the
    key stays out of git.
@@ -336,10 +332,10 @@ CI verifies your production image builds on every pull request that touches a bu
 
 Check: `curl -s -o /dev/null -w '%{http_code}\n' https://app.yourdomain.com/up`
 prints `200`, and the site loads in a browser. Then take the first backup by
-hand instead of waiting for the hour:
+hand instead of waiting for the night:
 
 ```bash
-bin/kamal app exec "bin/rails backup:now"      # prints the backup it uploaded
+bin/kamal app exec "bin/rails backup:now"      # prints the backup it stored
 bin/kamal app exec "bin/rails backup:status"   # names the latest
 ```
 
@@ -394,26 +390,95 @@ runner joins that network first: [SSH over a private network](#ssh-over-a-privat
 
 ## Back up the database
 
-Every hour, `DatabaseBackupJob` copies the primary database with SQLite's own
-`VACUUM INTO`, which takes a consistent copy while the app keeps writing,
-checks the copy with SQLite's integrity check, compresses it, and stores it in
-an S3-compatible bucket or a folder on another disk. A dead disk or a bad
-migration costs at most the last hour.
+Once a day, `DatabaseBackupJob` makes one file holding the database and the
+uploaded files, and stores it in a folder or a bucket. The database copy comes
+from SQLite's own `VACUUM INTO`, which takes a consistent copy while the app
+keeps writing, and is checked with SQLite's integrity check before it's kept.
+
+Production boots without a destination, so an idea you're still testing can
+ship first. Until you set one, the boot log and every scheduled run say
+"Backups are off", and `backup:status` says the same. Set one before real
+people put real data in.
 
 - **Backed up:** `storage/production.sqlite3`, which holds every account,
-  workspace and record.
+  workspace and record, and the uploaded files beside it on the storage volume.
 - **Not needed:** the cache and cable databases, which rebuild themselves.
 - **An accepted loss:** the queue database. Jobs waiting at the moment of a
   disaster are lost; recurring ones run again on schedule.
-- **Not yet:** uploaded files on the storage volume. Moving them into the same
-  bucket is the next change.
+- **How much you can lose:** up to a day. `BACKUP_SCHEDULE` takes any schedule
+  Solid Queue reads, such as `every hour` or `every day at 4am`, under
+  `env.clear` in `config/deploy.yml`. Each backup holds every uploaded file, so
+  a frequent schedule multiplies the space a large upload folder takes.
 - **The key that opens them:** a backup decrypts only with `production.key`,
   so keep that key in your password manager, off the server.
 
-### The bucket
+### Start with a folder
 
-Any S3-compatible provider works. Pick one that isn't your server's provider,
-so one company's outage or account trouble can't take both.
+Set `BACKUP_PATH` to a folder the container can write to. Where that folder
+lives decides what the backups survive:
+
+| The folder is on | It survives | It doesn't survive |
+| --- | --- | --- |
+| The server's own disk, such as `/srv/backups` | a bad migration, a deleted record | a dead disk |
+| A second drive, or a NAS on your network | a dead server disk | a fire, flood or theft that takes the site |
+| A bucket elsewhere ([next section](#move-to-a-bucket-when-the-data-matters)) | losing the whole site | |
+
+On the server, make the folder and let the container's user, uid 1000, write
+to it. For a NAS or a drive, mount it there first so it comes back at boot
+(NFS or SMB in `/etc/fstab`).
+
+```bash
+ssh root@<server-ip> "mkdir -p /srv/backups && chown 1000:1000 /srv/backups"
+```
+
+Then pass it into the container and point `BACKUP_PATH` at it in
+`config/deploy.yml`:
+
+```yaml
+volumes:
+  - "modelrails_base_storage:/rails/storage"
+  - "/srv/backups:/backups"
+
+env:
+  clear:
+    BACKUP_PATH: /backups
+```
+
+- **Retention:** after each backup the app deletes that deployment's backups
+  older than `BACKUP_RETENTION_DAYS`, 30 unless you set it. That means the
+  server can delete its own backups, so on a NAS turn on its snapshots, which
+  the server can't reach, against someone who breaks in.
+- **On the database's disk:** when the folder shares a disk with the database,
+  every backup logs a warning and `backup:status` repeats it. The backup still
+  runs. That's expected for `/srv/backups`. For a NAS it means the drive isn't
+  mounted, and the backups are landing on the server's own disk.
+
+The backups sit in the folder as ordinary files, under `backups/<deployment>/`,
+so you can copy them anywhere by hand.
+
+### Move to a bucket when the data matters
+
+A bucket with a different company from your server's survives losing the
+whole site. It costs a little each month, which is why it's the second step,
+not the first. Remove `BACKUP_PATH`, name the bucket under `env.clear`, and put
+its key in `bin/rails credentials:edit --environment production`:
+
+```yaml
+env:
+  clear:
+    OBJECT_STORAGE_BUCKET: yourapp-backups
+    OBJECT_STORAGE_REGION: eu-central-003
+    OBJECT_STORAGE_ENDPOINT: https://s3.eu-central-003.backblazeb2.com
+```
+
+```yaml
+object_storage:
+  access_key_id: ...
+  secret_access_key: ...
+```
+
+Production refuses to boot with a bucket that's missing its region or key, or
+with both `BACKUP_PATH` and a bucket set.
 
 | Provider | `OBJECT_STORAGE_REGION` | `OBJECT_STORAGE_ENDPOINT` |
 | --- | --- | --- |
@@ -434,50 +499,16 @@ A server you run yourself, such as Garage, usually also needs
   backups, not the app, which is what lets the key go without delete
   permission.
 
-Each backup is `backups/<deployment>/<time>.sqlite3.gz`, and
+Each backup is `backups/<deployment>/<time>.tar.gz`, and
 `backups/<deployment>/latest` names the newest. The deployment is
 `production`, or the credentials a deploy runs on (`staging`), so staging can
-share the bucket without touching production's backups.
-
-### Or a folder on another disk
-
-A NAS, or a fireproof drive such as an ioSafe, on your own network works too.
-Mount it on the server so it comes back at boot (NFS or SMB in `/etc/fstab`),
-pass it into the container, and point `BACKUP_PATH` at it in
-`config/deploy.yml`:
-
-```yaml
-volumes:
-  - "modelrails_base_storage:/rails/storage"
-  - "/mnt/backups:/backups"
-
-env:
-  clear:
-    BACKUP_PATH: /backups
-```
-
-- **Writable by the app:** the container runs as user 1000, so the mounted
-  folder must let uid 1000 write.
-- **Retention:** after each backup the app deletes that deployment's backups
-  older than `BACKUP_RETENTION_DAYS`, 30 unless you set it. That means the
-  server can delete its own backups, so turn on the NAS's snapshots, which the
-  server can't reach, against someone who breaks in.
-- **The unmounted-drive trap:** when the drive isn't mounted, `/mnt/backups` is
-  an ordinary folder on the server's own disk. The backup job checks for that
-  and fails every hour until the drive is back, rather than writing backups
-  that would die with the disk.
-- **What it doesn't survive:** a fire, flood or theft that takes the whole
-  site, unless the drive is built for it or the NAS also copies the backups to
-  a bucket somewhere else.
-
-The backups sit in the folder as ordinary files, under
-`backups/<deployment>/`, and the restore below works the same way.
+share the bucket, or the folder, without touching production's backups.
 
 ### Check it runs
 
 `bin/kamal app exec "bin/rails backup:status"` names the latest backup, and
-its time should be under an hour old. A backup that fails is a failed
-`DatabaseBackupJob`; the next hour tries again.
+its time should be within your schedule, a day by default. A backup that fails
+is a failed `DatabaseBackupJob`; the next scheduled run tries again.
 
 ### Restore
 
@@ -489,16 +520,20 @@ bin/kamal app exec "bin/rails backup:restore"   # the latest backup
 bin/kamal app start
 ```
 
-To go further back, name a backup from the bucket's listing:
+To go further back, name a backup from the folder or the bucket's listing:
 
 ```bash
-bin/kamal app exec "bin/rails 'backup:restore[backups/production/2026-11-01T140005Z.sqlite3.gz]'"
+bin/kamal app exec "bin/rails 'backup:restore[backups/production/2026-11-01T020005Z.tar.gz]'"
 ```
 
-The restore checks the backup with SQLite's integrity check before it touches
-anything, then moves the current database aside, with its WAL files, as
+The restore checks the backup's database with SQLite's integrity check before
+it touches anything. It then brings back any uploaded file that's missing, and
+moves the current database aside, with its WAL files, as
 `production.sqlite3.before-restore-<time>`, so a restore can itself be undone.
 Delete that file once you're sure.
+
+The same restore moves an app to a new server: deploy there, copy a backup
+into its folder under the same name, and restore it by that name.
 
 **Practise a restore before you need one.** Run it once on staging or a
 throwaway server, and write down the date. A backup nobody has restored is
@@ -943,7 +978,7 @@ Steps 2 and 5 of [First deploy](#first-deploy) cover these:
 
 ## Production preflight
 
-`config/initializers/required_production_config.rb` refuses to boot a production process when `RAILS_HOST` is unset or still a placeholder (`example.com`, anything ending in `.example`), when `SMTP_ADDRESS` is unset, `localhost` or a placeholder, or the credentials' `smtp.user_name` or `smtp.password` is blank (see [Configure outbound mail](#4-configure-outbound-mail)), when the Active Record encryption keys are missing from the production credentials, or when no backup bucket is configured ([Back up the database](#back-up-the-database)). The reason it refuses rather than warns: every mailer link — magic links, password resets, invitations — is generated from `RAILS_HOST`, and DNS-rebinding protection (`config.hosts`) is derived from it. With a placeholder value the app boots, `/up` reports healthy, and nobody can sign in. Missing encryption keys fail the same way — healthy `/up`, then the first read of a user raises. A failed boot is the only version of either failure you can see. Keys: `bin/rails db:encryption:init`, pasted into `bin/rails credentials:edit --environment production` ([Forking](/docs/developer/forking#bootstrap-secrets-and-configuration)).
+`config/initializers/required_production_config.rb` refuses to boot a production process when `RAILS_HOST` is unset or still a placeholder (`example.com`, anything ending in `.example`), when `SMTP_ADDRESS` is unset, `localhost` or a placeholder, or the credentials' `smtp.user_name` or `smtp.password` is blank (see [Configure outbound mail](#4-configure-outbound-mail)), when the Active Record encryption keys are missing from the production credentials, or when a backup bucket is half configured or set alongside `BACKUP_PATH` ([Back up the database](#back-up-the-database)). With no backup destination at all it boots and logs that backups are off. The reason it refuses rather than warns: every mailer link — magic links, password resets, invitations — is generated from `RAILS_HOST`, and DNS-rebinding protection (`config.hosts`) is derived from it. With a placeholder value the app boots, `/up` reports healthy, and nobody can sign in. Missing encryption keys fail the same way — healthy `/up`, then the first read of a user raises. A failed boot is the only version of either failure you can see. Keys: `bin/rails db:encryption:init`, pasted into `bin/rails credentials:edit --environment production` ([Forking](/docs/developer/forking#bootstrap-secrets-and-configuration)).
 
 Rules the guard follows:
 
@@ -979,7 +1014,7 @@ This holds:
 - Solid Cable (`storage/production_cable.sqlite3`)
 - Active Storage file uploads (if you use disk storage)
 
-Losing it loses your entire app state. The primary database is backed up every hour ([Back up the database](#back-up-the-database)); uploaded files on this volume are not yet, and copying a live SQLite file with `cp` is not a backup.
+Losing it loses your entire app state. The primary database and the uploaded files are backed up once you set a destination ([Back up the database](#back-up-the-database)); copying a live SQLite file with `cp` is not a backup.
 
 ## File serving is already offloaded — don't configure X-Sendfile
 

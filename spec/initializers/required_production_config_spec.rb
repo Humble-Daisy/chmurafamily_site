@@ -142,14 +142,16 @@ RSpec.describe RequiredProductionConfig do
       let(:ready) { { "RAILS_HOST" => "app.humbledaisy.com", "SMTP_ADDRESS" => "smtp.postmarkapp.com" } }
       let(:login) { { smtp: { user_name: "token", password: "token" } } }
 
-      it "raises when no bucket is named" do
-        expect { described_class.check!(ready.merge(backups.except("OBJECT_STORAGE_BUCKET")), login.merge(storage)) }
-          .to raise_error(RuntimeError, /OBJECT_STORAGE_BUCKET is unset/)
+      it "boots with backups off, and says so in the log" do
+        logger = instance_double(Logger, warn: nil)
+
+        expect { described_class.check!(ready, login, logger: logger) }.not_to raise_error
+        expect(logger).to have_received(:warn).with(/Backups are off.*BACKUP_PATH/m)
       end
 
-      it "raises when no region is named" do
+      it "raises when a bucket is named without its region" do
         expect { described_class.check!(ready.merge(backups.except("OBJECT_STORAGE_REGION")), login.merge(storage)) }
-          .to raise_error(RuntimeError, /OBJECT_STORAGE_REGION is unset/)
+          .to raise_error(RuntimeError, /OBJECT_STORAGE_BUCKET is set but OBJECT_STORAGE_REGION is unset/)
       end
 
       it "raises when the bucket's key is missing from the credentials" do
@@ -168,7 +170,7 @@ RSpec.describe RequiredProductionConfig do
       end
 
       it "names the fix, the doc and the opt-out in the message" do
-        described_class.check!(ready, login)
+        described_class.check!(ready.merge(backups), login)
         raise "expected check! to raise"
       rescue RuntimeError => e
         expect(e.message).to include("credentials:edit --environment production")

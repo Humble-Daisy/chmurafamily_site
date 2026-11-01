@@ -13,7 +13,7 @@ production:
   database_backup:
     class: DatabaseBackupJob
     queue: default
-    schedule: every hour
+    schedule: <%= ENV.fetch("BACKUP_SCHEDULE", "every day at 2am") %>
 
   clear_solid_queue_finished_jobs:
     command: "SolidQueue::Job.clear_finished_in_batches(sleep_between_batches: 0.3)"
