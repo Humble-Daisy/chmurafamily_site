@@ -224,7 +224,7 @@ bin/rails credentials:edit --environment production
 
 Add OAuth keys and `mailer.from` (structure in [Getting Started](/docs/developer/getting-started)),
 and to production the mail provider's login as `smtp.user_name` and `smtp.password`
-([Deployment](/docs/developer/deployment#3-configure-outbound-mail)).
+([Deployment](/docs/developer/deployment#4-configure-outbound-mail)).
 Commit your `.yml.enc` files; the `.key` files stay gitignored. Kamal builds the
 image from a clone of the commit, so an uncommitted credentials file never
 reaches production, and the app refuses to boot without it. `.kamal/secrets`

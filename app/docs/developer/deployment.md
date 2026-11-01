@@ -24,24 +24,90 @@ The template ships these defaults safely; you only need to think about them when
 
 ## First deploy
 
-### 1. Configure `config/deploy.yml`
+These steps go from a fresh fork to a deployed app you can trust, in order,
+and each one ends with a check. They assume one cloud server and one person
+deploying from a laptop. Three sections after them add to the path:
+[More than one person deploys](#more-than-one-person-deploys),
+[Hardware you run yourself](#hardware-you-run-yourself), and
+[Changing the registry](#changing-the-registry), for the one default you may
+outgrow.
 
-Replace placeholders with your real values:
+### 1. Prepare the server
+
+Rent a Linux server (a current Ubuntu LTS image works) and note whether it is
+`amd64` or `arm64`. Before the first deploy touches it:
+
+- **SSH keys only.** Give the provider your public key when you create the
+  server, then make sure password login is off: `PasswordAuthentication no` in
+  `/etc/ssh/sshd_config` and anything under `/etc/ssh/sshd_config.d/`, then
+  `systemctl reload ssh`. Kamal logs in as `root` unless `ssh.user` in
+  `config/deploy.yml` names someone else. Root with key-only login is a sound
+  default: another user would need the `docker` group, and that group controls
+  the host as fully as root does.
+- **A firewall open on ports 22, 80 and 443 only.** Use your provider's cloud
+  firewall. A firewall on the host itself, such as `ufw`, doesn't cover ports
+  Docker publishes, because Docker writes its own rules ahead of it.
+- **Security updates install themselves.** On Ubuntu that is
+  `unattended-upgrades`; `systemctl status unattended-upgrades` shows whether
+  it runs. SSH is open to everyone, so its fixes can't wait for you.
+- **Docker from Docker's own repository.** Install Docker Engine from
+  [Docker's apt repository](https://docs.docker.com/engine/install/ubuntu/)
+  before the first deploy. Otherwise `bin/kamal setup` installs it by piping a
+  script from get.docker.com into a shell, which this template avoids
+  everywhere else.
+- **The host key, checked once.** Your laptop and CI verify it on every
+  deploy. Compare what the server presents with the fingerprint your provider
+  shows in its console or boot log, and trust it only once they match:
+
+  ```bash
+  ssh-keyscan -t ed25519 <server-ip> | ssh-keygen -lf -
+  ```
+
+  Keep the `ssh-keyscan` output; CI needs it in [step 6](#6-deploy-from-ci).
+- **Somewhere for backups**, chosen before there is data to lose
+  ([Storage volumes](#storage-volumes)).
+
+Check: `ssh root@<server-ip> docker version` prints the server's Docker
+version, and `ssh -o PubkeyAuthentication=no root@<server-ip>` is refused with
+`Permission denied (publickey)`.
+
+This is the bar for a cloud server, which sits outside your own network and
+has a provider console to recover it. A machine you run yourself needs more:
+[Hardware you run yourself](#hardware-you-run-yourself).
+
+### 2. Configure `config/deploy.yml`
+
+[Forking](forking) already had you rename `service:`, `image:` and the volume.
+Now set the server, the domain and the architecture:
 
 ```yaml
 servers:
   web:
     hosts:
-      - <YOUR-SERVER-IP>   # was: 192.168.0.1 — exactly one; see above
+      - <your-server-ip>     # was: 192.168.0.1 — exactly one; see above
 
-registry:
-  server: ghcr.io          # or your registry
-  username: your-github-username
-  password:
-    - KAMAL_REGISTRY_PASSWORD
+proxy:                       # ships commented out; uncomment it
+  ssl: true
+  host: app.yourdomain.com
+
+builder:
+  arch: amd64                # or arm64, to match the server
+
+env:
+  clear:
+    RAILS_HOST: app.yourdomain.com
 ```
 
-### 2. Set secrets
+- **`proxy:`** turns on HTTPS. A deploy without it reports healthy while
+  nobody can reach the site ([SSL configuration](#ssl-configuration-paired-changes-required)).
+- **`RAILS_HOST`** is the host every email link is built from. Production
+  refuses to boot without it ([Production preflight](#production-preflight)).
+- **`registry:`** stays as shipped. `localhost:5555` is Kamal's local
+  registry: Kamal runs a registry on the machine doing the deploy, and the
+  server pulls the new image from it through the deploy's SSH connection. No
+  registry account or password is involved.
+
+### 3. Set secrets
 
 **`.kamal/secrets` is tracked in git. Never put a credential in it — put a reference.**
 
@@ -58,11 +124,25 @@ KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD
 KAMAL_REGISTRY_PASSWORD=$(op read op://YourVault/ghcr/token)
 ```
 
-The shipped file already uses the reference form for `RAILS_MASTER_KEY`; follow
-it. `spec/code_smells/kamal_secrets_hold_no_literals_spec.rb` fails the suite if
+`spec/code_smells/kamal_secrets_hold_no_literals_spec.rb` fails the suite if
 a literal appears, naming the key but never printing the value.
 
-Where the raw value should live, in preference order:
+With the shipped local registry, a deploy needs one secret: `RAILS_MASTER_KEY`,
+the key that decrypts the production credentials. The template uses
+per-environment credentials, so the key is `config/credentials/production.key`,
+created when you first ran `bin/rails credentials:edit --environment production`
+([Forking](forking)), not the single `config/master.key` a default `rails new`
+would use. `.kamal/secrets` takes `RAILS_MASTER_KEY` from the deploying
+environment when it is set and not blank, which is how CI passes it, and
+otherwise reads that file, so your laptop deploys with no setup.
+
+**Back the key up in a password manager now.** Without it nobody can decrypt
+the credentials, and the encrypted file in git is useless. When a second person
+needs it, don't send it in chat: follow
+[More than one person deploys](#more-than-one-person-deploys).
+
+Any secret you add later, such as a registry token, belongs in one of these, in
+order of preference:
 
 1. **A password manager**, read inline with `$(...)`. Nothing lands on disk.
 2. **Your CI platform's secret store** (GitHub Actions secrets), exported into
@@ -71,25 +151,19 @@ Where the raw value should live, in preference order:
    profile. Anything exported there is inherited by *every* process you launch
    and shows up in process-environment dumps.
 
-For `RAILS_MASTER_KEY`: the template uses per-environment credentials
-(`bin/rails credentials:edit --environment production`, see [Forking](forking)),
-so the key is `config/credentials/production.key` — not the single
-`config/master.key` a default `rails new` would use. The tracked
-`.kamal/secrets` takes `RAILS_MASTER_KEY` from the deploying environment when
-it is set and not blank, so a CI job passes the key from its secret store, and
-otherwise reads that file, so a laptop deploys with no setup. The value itself
-is what goes into a managed platform's settings.
-
 #### Credentials per deploy
 
-A staging deploy runs `RAILS_ENV=production`, so by default it would decrypt
+Only a staging destination needs this. A staging deploy runs
+`RAILS_ENV=production`, so by default it would decrypt
 the production credentials, mail login included. `RAILS_CREDENTIALS_ENV=staging`
 switches it to `config/credentials/staging.yml.enc` with `staging.key`, whose
 value is then that deploy's `RAILS_MASTER_KEY`. Unset, nothing changes. The
 staging destination, `config/deploy.staging.yml`, sets it, and
 `.kamal/secrets.staging` reads `staging.key` the way `.kamal/secrets` reads
 production's. That destination also keeps its own storage volume, so staging
-can share production's host without sharing its databases. Create the file
+can share production's host without sharing its databases. Give it its own
+`proxy.host` and `RAILS_HOST` there too, such as `staging.yourdomain.com`;
+otherwise it inherits production's. Create the credentials file
 through the same switch:
 
 ```bash
@@ -107,42 +181,7 @@ real user.
 > A root `.env` does **not** reach Kamal. Kamal's dotenv parses its own secrets
 > files, not `.env` — that file is for local Rails only.
 
-#### Encrypting deploy secrets with fnox (optional)
-
-Rails credentials stay the source of truth for what the app reads at runtime;
-nothing here copies them anywhere else. fnox changes how a deploy gets the few
-values outside them, such as a key file's contents or a registry token, once
-copying each one into every CI system and laptop gets old. With its age
-provider, the values sit in the repository as ciphertext. Each operator and
-each unattended runner decrypts them with its own identity, so CI needs one
-secret, `FNOX_AGE_KEY`, instead of one per value.
-
-The template ships no `fnox.toml`, because one would carry another app's
-recipients and ciphertext into every fork. An app that opts in commits its
-own, installs fnox through mise, and reads each value in `.kamal/secrets`
-through command substitution:
-
-```bash
-RAILS_MASTER_KEY=$(fnox get RAILS_MASTER_KEY)
-KAMAL_REGISTRY_PASSWORD=$(fnox get KAMAL_REGISTRY_PASSWORD)
-```
-
-What keeps it safe:
-
-- **Recipients** are each operator's identity plus one per unattended deploy
-  runner, so a runner can be removed on its own.
-- **Write values with `fnox set`.** A value typed into `fnox.toml` by hand
-  isn't encrypted.
-- **Back up private identities in a password manager**, never a repository.
-  Git and Docker already ignore `fnox.local.toml` and `age.txt`.
-- **The deploy host holds no identity.** It receives decrypted values at
-  deploy time, through `env.secret`.
-- **Removing a recipient means `fnox reencrypt` and rotating every secret
-  they could read.** Git history keeps the old ciphertext, and their identity
-  still opens it.
-- **Never print a decrypted value** in a log or CI output.
-
-### 3. Configure outbound mail
+### 4. Configure outbound mail
 
 Sign-in is an email. Magic links, invitations and password resets all leave
 the box through Action Mailer, so a deployment with no mail server boots,
@@ -243,21 +282,29 @@ To check a deployment: request a magic link for your own address and read the
 mail. If nothing arrives, `kamal app logs` shows the failed job with the
 provider's response.
 
-### 4. Bootstrap and deploy
+### 5. Point DNS, then deploy
+
+Point your domain at the server and wait until `dig +short app.yourdomain.com`
+prints the server's IP. kamal-proxy asks Let's Encrypt for the certificate on
+the first request, which fails until the name resolves to the server.
 
 ```bash
-bin/kamal setup     # First-time only — installs Docker on the host
-bin/kamal deploy    # Subsequent deploys
+bin/kamal setup     # First time only
+bin/kamal deploy    # Every deploy after
 ```
 
 CI verifies your production image builds on every pull request that touches a build input (the `image_scan` workflow's cold build) and on every push to `main` (the `docker_build` workflow; see [Getting Started](/docs/developer/getting-started)), and the pre-push hook runs the same build locally when you change one, so the first time you run `kamal deploy` you're not also debugging Dockerfile issues.
 
+Check: `curl -s -o /dev/null -w '%{http_code}\n' https://app.yourdomain.com/up`
+prints `200`, and the site loads in a browser.
+
 For staging, set its host in `config/deploy.staging.yml`, then
 `bin/kamal setup -d staging` and `bin/kamal deploy -d staging`.
 
-Once the app is up, mint the first instance operator — see [Instance operations: Day one](operations#day-one-on-an-invite-only-instance).
+Once the app is up, mint the first instance operator, the account that runs
+the instance itself — see [Instance operations: Day one](operations#day-one-on-an-invite-only-instance).
 
-### 5. Deploy from CI
+### 6. Deploy from CI
 
 `.github/workflows/deploy.yml` deploys whatever lands on a branch, with
 production and staging switched on separately:
@@ -272,9 +319,18 @@ environment of the same name (`production` or `staging`). Give each one these
 secrets:
 
 - `RAILS_MASTER_KEY`: that environment's key file contents.
-- `SSH_PRIVATE_KEY`: a key the host accepts for Kamal's SSH user.
-- `SSH_KNOWN_HOSTS`: the host's line from `ssh-keyscan`, checked against the
-  host itself, so the runner never trusts on first use.
+- `SSH_PRIVATE_KEY`: a key made for CI alone, such as
+  `ssh-keygen -t ed25519 -f ci-deploy -N ""`, whose public half goes in the
+  server's `~/.ssh/authorized_keys` for Kamal's SSH user. Kept apart from
+  yours, it can be removed on its own.
+- `SSH_KNOWN_HOSTS`: the `ssh-keyscan` line you checked in
+  [step 1](#1-prepare-the-server), so the runner never trusts on first use.
+
+**Restrict each environment to its branch.** In the repository's Settings →
+Environments, set *Deployment branches and tags* to *Selected branches and
+tags*: `main` for `production`, `release/**` for `staging`. The workflow
+already picks the environment by branch; the restriction keeps any other
+branch or workflow from reading those secrets.
 
 The workflow doesn't run the suite again. The branch rules
 ([Forking](forking#protect-the-branches)) let a PR merge only after `static`
@@ -285,10 +341,222 @@ repository's Environments page, which is the answer to "what's live?". To make
 the first deploy after switching one on, rerun the skipped run for that
 branch's latest push.
 
-## Deploying to a machine you run
+The runner reaches the server the way your laptop does, over SSH open to the
+internet with keys only. If SSH is reachable only over a private network, the
+runner joins that network first: [SSH over a private network](#ssh-over-a-private-network).
 
-Kamal will deploy to any Linux host it can reach over SSH, including one under
-your desk. A machine you run is a safe target once it meets every item below.
+## More than one person deploys
+
+Once a second person deploys, the production key has to reach them, and it
+has to stop working for them when they leave. Sending the key file in chat
+does the first and can never do the second. The template's pattern for this
+is [fnox](https://fnox.jdx.dev): the deploy secrets live in the repository,
+encrypted, and each person and each CI runner decrypts them with a key of its
+own.
+
+Rails credentials don't change; they stay the source of truth for everything
+the app reads at runtime. fnox holds only what a deploy needs from outside
+them: the production key, staging's key, and a registry token if you have one.
+Three words carry the rest of this section:
+
+- **Identity**: your private key, `~/.config/fnox/age.txt`. It never leaves
+  your machine; back it up in a password manager.
+- **Recipient**: the public half of an identity, listed in `fnox.toml`. Every
+  value is encrypted to every recipient.
+- **Runner**: a CI job that deploys. It gets an identity of its own.
+
+The template ships no `fnox.toml`, because one would carry another app's
+recipients and ciphertext into every fork. Git and Docker already ignore
+`fnox.local.toml` and `age.txt`.
+
+### Set it up
+
+The first person installs the tools and makes an identity:
+
+```bash
+mise use fnox age && mise lock fnox age
+mkdir -p ~/.config/fnox
+age-keygen -o ~/.config/fnox/age.txt    # prints your recipient, age1…
+fnox init --skip-wizard
+```
+
+Replace the new `fnox.toml` with your recipient:
+
+```toml
+default_provider = "age"
+
+[providers.age]
+type = "age"
+recipients = [
+  "age1…", # you
+]
+```
+
+Store each key, pasting it at the hidden prompt. `fnox set` writes the
+ciphertext; a value typed into `fnox.toml` by hand isn't encrypted.
+
+```bash
+fnox set RAILS_MASTER_KEY                     # config/credentials/production.key
+fnox set RAILS_MASTER_KEY --profile staging   # staging.key, if you deploy staging
+```
+
+Then read the key through fnox in `.kamal/secrets`, replacing its
+`RAILS_MASTER_KEY` line:
+
+```bash
+RAILS_MASTER_KEY=$(fnox get RAILS_MASTER_KEY)
+```
+
+and in `.kamal/secrets.staging`:
+
+```bash
+RAILS_MASTER_KEY=$(fnox -P staging get RAILS_MASTER_KEY)
+```
+
+Commit `fnox.toml`, `mise.toml`, `mise.lock` and the secrets files. Check:
+`fnox check --all` passes, and `bin/kamal deploy` works as before.
+
+### Add someone
+
+1. They run `mise install` and
+   `age-keygen -o ~/.config/fnox/age.txt`, and send you the `age1…` line it
+   prints. That line is public; chat is fine.
+2. You add it to `recipients` with a comment naming them, and re-encrypt:
+
+   ```bash
+   fnox reencrypt --provider age
+   fnox reencrypt --provider age --profile staging
+   ```
+
+3. You commit; they pull and run `fnox check --all`.
+4. Add their SSH public key to the server's `~/.ssh/authorized_keys`.
+
+### Add CI
+
+Make CI an identity of its own:
+
+```bash
+age-keygen -o ci-age.txt    # prints CI's recipient
+```
+
+Add that recipient and re-encrypt as above. Store the contents of
+`ci-age.txt` as the `FNOX_AGE_KEY` secret in each GitHub environment, delete
+the file, and remove the environments' `RAILS_MASTER_KEY` secret. In
+`.github/workflows/deploy.yml`, install the tools before the deploy and hand it
+the key:
+
+```yaml
+      - name: Install fnox
+        uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+
+      - name: Deploy
+        env:
+          FNOX_AGE_KEY: ${{ secrets.FNOX_AGE_KEY }}
+```
+
+### Remove someone
+
+1. Delete their recipient, re-encrypt, and commit.
+2. Remove their SSH key from the server.
+3. **Rotate every secret they could read.** Git history keeps the old
+   ciphertext, and their identity still opens it. For the production key that
+   is everything in the production credentials, mail login and OAuth secrets
+   included: [Responding to a Secret Exposure](security#responding-to-a-secret-exposure).
+
+If people come and go often, that rotation is the cost of keeping secrets in
+git, and a shared vault fits better.
+
+Two rules hold whether or not you use fnox: the server never holds an
+identity, since it receives decrypted values at deploy time through
+`env.secret`; and no decrypted value is printed in a log or CI output.
+
+## Changing the registry
+
+The local registry keeps images on your own machines: the server can pull only
+while a deploy holds the SSH connection open. Move to a hosted registry, such
+as GitHub's at `ghcr.io`, when you need one of these:
+
+- **A server pulls without a deploy running**, such as a replacement server,
+  or a second one.
+- **Images kept somewhere you can inspect**, so you can scan them or run the
+  exact production image on your laptop to debug it.
+- **Your organisation requires it.**
+
+To switch to `ghcr.io`:
+
+1. Create a GitHub token (classic, since GitHub Packages doesn't accept
+   fine-grained tokens) with the `write:packages` scope.
+2. In `config/deploy.yml`, point the image and registry at it:
+
+   ```yaml
+   image: your-github-user/your-app
+
+   registry:
+     server: ghcr.io
+     username: your-github-user
+     password:
+       - KAMAL_REGISTRY_PASSWORD
+   ```
+
+3. In `.kamal/secrets` and `.kamal/secrets.staging`, add
+   `KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD`, or
+   `KAMAL_REGISTRY_PASSWORD=$(fnox get KAMAL_REGISTRY_PASSWORD)` after storing
+   it with `fnox set`.
+4. For CI without fnox, add the token as `KAMAL_REGISTRY_PASSWORD` in each
+   GitHub environment, and to the deploy step's `env:` in
+   `.github/workflows/deploy.yml`.
+5. After the first push, check the package's visibility on your GitHub
+   profile's Packages tab.
+
+Check: `bin/kamal registry login` succeeds.
+
+## SSH over a private network
+
+[Step 1](#1-prepare-the-server) leaves SSH open to the internet with keys
+only. Two failures still reach it there: a flaw in the SSH server itself, which
+anyone can try, and a leaked key, which works from anywhere. Closing SSH to
+everything but a private network removes both, at a cost: everyone who
+deploys, CI included, joins that network first. It's required for
+[hardware you run yourself](#hardware-you-run-yourself) and an upgrade for a
+cloud server. This recipe uses Tailscale; WireGuard works too, with more setup.
+
+1. Install Tailscale on the server and on each deployer's machine, and tag the
+   server, say `tag:server`.
+2. Replace the tailnet policy's default allow-everything rule with one that
+   keeps your own devices connected and lets `tag:ci` reach `tag:server` on
+   TCP port 22, and nothing else.
+3. Point `servers.web.hosts` at the server's Tailscale name, and check the
+   host key over it as in step 1. That `ssh-keyscan` line is
+   `SSH_KNOWN_HOSTS` now.
+4. Have CI join on every run. In Tailscale's admin console, create an OAuth
+   client with the `auth_keys` scope and the tag `tag:ci`, store its ID and
+   secret in each GitHub environment as `TS_OAUTH_CLIENT_ID` and
+   `TS_OAUTH_SECRET`, and add this step before "Load the deploy key":
+
+   ```yaml
+         - name: Join the tailnet
+           uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+           with:
+             oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+             oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+             tags: tag:ci
+   ```
+
+5. Deploy once over the tailnet from your laptop and once from CI. Only then
+   close port 22 in the provider firewall, keeping 80 and 443. The provider's
+   console is your way back in if you lock yourself out.
+
+Check: from a machine outside the tailnet, `ssh` to the server's public IP
+times out.
+
+## Hardware you run yourself
+
+A machine at home or in an office can be a deploy target, but it shares a
+network with your other devices, and no provider console or firewall stands
+behind it. On top of [step 1](#1-prepare-the-server), it meets every item
+below.
+
+**SSH arrives over a private network only** ([recipe](#ssh-over-a-private-network)).
 
 **It comes back on its own.** After a power cut, the chain runs power-on, host
 boot, VM if there is one, Docker, then kamal-proxy and the app containers
@@ -299,19 +567,19 @@ not. Prove the chain with a reboot and no login, and again after OS or host
 upgrades. Full-disk encryption that waits for an unlock breaks the chain, so
 choose per host and write down why.
 
-**Its SSH host key never changes unannounced.** Deploys check host keys
-(`SSH_KNOWN_HOSTS`, above), and checking stays on. A cloud-image VM can
+**Its SSH host key never changes unannounced.** A cloud-image VM can
 regenerate its keys whenever its instance ID changes; if yours does, pin the
 keys and restore them at every boot. A known-hosts line is a public key, safe
 to commit.
 
-**Management is private.** SSH and deploys arrive over a private network, such
-as WireGuard or Tailscale, never public SSH. The CI deploy identity reaches SSH
-on deploy hosts and nothing else.
-
-**Only HTTP and HTTPS are public**, and the host sits in its own network zone,
-cut off from the rest of your internal network. A third-party tunnel in front
-also works, but it puts that third party in the TLS path.
+**It sits in its own network zone**, such as a separate VLAN or guest network
+that can't reach your other devices, and your router forwards only TCP 80 and
+443 to it. Two things can stop that working. A public IP that changes needs
+dynamic DNS, from your router or DNS provider. Carrier-grade NAT, where your
+provider shares one public IP across customers, allows no forwarding at all:
+you have it when your router's WAN address differs from what
+`curl -s https://ifconfig.me` reports. A tunnel service works around both, but
+it puts that third party in the TLS path.
 
 **One kamal-proxy serves every app on the host**, each routed by its
 `proxy.host`. Its `proxy.run` settings take effect when it boots, so they
@@ -332,20 +600,17 @@ proxy:
 With `ssl: false`, kamal-proxy forwards `X-Forwarded-Proto`, and the shipped
 Rails settings stay as they are ([SSL configuration](#ssl-configuration-paired-changes-required)).
 
-**No decryption identity lives on it** ([fnox](#encrypting-deploy-secrets-with-fnox-optional)).
-
 **Its data is backed up elsewhere.** The [storage volume](#storage-volumes)
 lives on the host's Linux filesystem, a separate machine pulls the backups,
 and a restore has been tested.
 
-**Images are built for its architecture.** `builder.arch` ships as `amd64`;
-set it to the host's. When the machine running Kamal differs, as GitHub's x86
-runners do from an arm64 host, build on the host through `builder.remote` or on
-a runner of the same architecture.
+**Images are built for its architecture.** When the machine running Kamal
+differs, as GitHub's x86 runners do from an arm64 host, build on the host
+through `builder.remote` or on a runner of the same architecture.
 
 **Self-hosted CI runners, if you use them**, are ephemeral, never run pull
-requests from forks, carry their own decryption identity, and never run on the
-deploy host.
+requests from forks, carry their own identity, and never run on the deploy
+host.
 
 Adding another app to a host that meets all of this is configuration only:
 its own `service`, `proxy.host`, and volume.
@@ -447,7 +712,7 @@ Broken combinations:
 
 ### SSL deployment checklist
 
-Before the first deploy:
+Steps 2 and 5 of [First deploy](#first-deploy) cover these:
 
 - [ ] Uncomment the `proxy:` block in `config/deploy.yml` and set `host:` to your real domain
 - [ ] Point your domain's DNS at the server first — kamal-proxy obtains the Let's Encrypt certificate on demand, which fails if the name doesn't resolve to the host yet
@@ -455,7 +720,7 @@ Before the first deploy:
 
 ## Production preflight
 
-`config/initializers/required_production_config.rb` refuses to boot a production process when `RAILS_HOST` is unset or still a placeholder (`example.com`, anything ending in `.example`), when `SMTP_ADDRESS` is unset, `localhost` or a placeholder, or the credentials' `smtp.user_name` or `smtp.password` is blank (see [Configure outbound mail](#3-configure-outbound-mail)), or when the Active Record encryption keys are missing from the production credentials. The reason it refuses rather than warns: every mailer link — magic links, password resets, invitations — is generated from `RAILS_HOST`, and DNS-rebinding protection (`config.hosts`) is derived from it. With a placeholder value the app boots, `/up` reports healthy, and nobody can sign in. Missing encryption keys fail the same way — healthy `/up`, then the first read of a user raises. A failed boot is the only version of either failure you can see. Keys: `bin/rails db:encryption:init`, pasted into `bin/rails credentials:edit --environment production` ([Forking](/docs/developer/forking#bootstrap-secrets-and-configuration)).
+`config/initializers/required_production_config.rb` refuses to boot a production process when `RAILS_HOST` is unset or still a placeholder (`example.com`, anything ending in `.example`), when `SMTP_ADDRESS` is unset, `localhost` or a placeholder, or the credentials' `smtp.user_name` or `smtp.password` is blank (see [Configure outbound mail](#4-configure-outbound-mail)), or when the Active Record encryption keys are missing from the production credentials. The reason it refuses rather than warns: every mailer link — magic links, password resets, invitations — is generated from `RAILS_HOST`, and DNS-rebinding protection (`config.hosts`) is derived from it. With a placeholder value the app boots, `/up` reports healthy, and nobody can sign in. Missing encryption keys fail the same way — healthy `/up`, then the first read of a user raises. A failed boot is the only version of either failure you can see. Keys: `bin/rails db:encryption:init`, pasted into `bin/rails credentials:edit --environment production` ([Forking](/docs/developer/forking#bootstrap-secrets-and-configuration)).
 
 Rules the guard follows:
 

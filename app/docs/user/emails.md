@@ -128,7 +128,7 @@ smtp:
 
 `lib/mail_delivery.rb` builds `config.action_mailer.smtp_settings` from both,
 and production refuses to boot when either is missing. Provider recipes:
-[Deployment](/docs/developer/deployment#3-configure-outbound-mail).
+[Deployment](/docs/developer/deployment#4-configure-outbound-mail).
 
 ### Default URL Host
 

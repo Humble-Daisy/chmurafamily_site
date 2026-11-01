@@ -87,7 +87,7 @@ RSpec.describe "bin/deploy-guide" do
     it "only points at doc sections that exist" do
       deployment_doc = File.read(File.join(app_root, "app", "docs", "developer", "deployment.md"))
 
-      expect(deployment_doc).to include("## Deploying without Kamal", "### 3. Configure outbound mail")
+      expect(deployment_doc).to include("## Deploying without Kamal", "### 4. Configure outbound mail")
     end
   end
 end

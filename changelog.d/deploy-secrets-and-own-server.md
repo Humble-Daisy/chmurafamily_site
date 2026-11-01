@@ -1,3 +1,3 @@
-### Added
+### Changed
 
-- The deployment guide covers encrypting deploy secrets with fnox and what a machine you run needs before it's a safe deploy target.
+- The deployment guide walks a fork to its first deploy in six checked steps, from preparing the server to deploying from CI, and covers team deploys with fnox, switching to a hosted registry, private-network SSH, and hardware you run yourself.

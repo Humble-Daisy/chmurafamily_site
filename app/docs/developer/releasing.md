@@ -209,7 +209,7 @@ into `next`, it joins a pile of stories that CI checks again, all together, afte
 the stories together for the first time, and `bin/release ship` publishes
 it. The version it replaces goes to the archive, tagged, ready to republish
 if you need to roll back. [Forking](forking#protect-the-branches) sets up the branch
-rules with `bin/branch-rules`, and [Deployment](deployment#5-deploy-from-ci)
+rules with `bin/branch-rules`, and [Deployment](deployment#6-deploy-from-ci)
 switches on the deploys.
 
 | Branch | Deploys to | Checked by | Takes changes from |
