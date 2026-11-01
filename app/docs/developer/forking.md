@@ -464,12 +464,14 @@ It needs a clean working tree, an `upstream` remote (`bin/setup` adds it) and
 the GitHub CLI, signed in.
 
 **A fork made before `bin/sync` existed doesn't have it yet.** Its first sync
-brings it in, so run that one from the template's copy:
+brings it in, so run that one from the template's copy. It needs the
+`release_flow` gem, which that sync adds to your `Gemfile`:
 
 ```bash
 git fetch upstream
+gem install release_flow
 d=$(mktemp -d); mkdir -p $d/bin $d/lib
-for f in bin/sync lib/clean_git_env.rb lib/github_origin.rb lib/release_changelog.rb; do git show upstream/main:$f > $d/$f; done
+for f in bin/sync lib/clean_git_env.rb lib/github_origin.rb; do git show upstream/main:$f > $d/$f; done
 ruby -e "load '$d/bin/sync'; Sync.new(root: Dir.pwd).run"
 ```
 

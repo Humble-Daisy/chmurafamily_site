@@ -14,6 +14,13 @@ RSpec.describe "the next-release workflow" do
     expect(triggers["workflow_run"]).to eq("workflows" => [ "CI" ], "types" => [ "completed" ], "branches" => [ "next" ])
   end
 
+  it "installs the bundle before bin/release, which runs from the release_flow gem" do
+    [ prepare, cut ].each do |job|
+      ruby = job["steps"].find { |step| step["uses"].to_s.start_with?("ruby/setup-ruby@") }
+      expect(ruby.dig("with", "bundler-cache")).to be(true)
+    end
+  end
+
   it "stays off until the AUTO_RELEASE repository variable says true" do
     expect([ prepare["if"], cut["if"] ]).to all(include("vars.AUTO_RELEASE == 'true'"))
   end

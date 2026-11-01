@@ -13,10 +13,12 @@ if one fits:
 - Signing in no longer loops after a password reset.
 ```
 
-An entry without a heading goes under "Changed".
+An entry without a heading goes under "Changed". `bin/release prepare` gathers
+every file here into the release's section of `CHANGELOG.md` and deletes
+them; this README stays.
 
 A fix for the release under review is the exception: its line goes under that
 release's `## v<name>` section in `CHANGELOG.md`, since a file here would wait
-for the next release. `bin/release prepare` gathers
-every file here into the release's section of `CHANGELOG.md` and deletes
-them; this README stays. The full flow is in `/docs/developer/releasing`.
+for the next release.
+
+The full flow is in `/docs/developer/releasing`.

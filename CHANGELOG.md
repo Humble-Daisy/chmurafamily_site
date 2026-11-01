@@ -4,6 +4,16 @@ All notable changes to ModelRails are documented here, organized by phase.
 
 ## [Unreleased]
 
+## v2026.10.31-4
+
+### Added
+
+- `bin/release` reads its branch, workflow and template names from an optional `.release_flow.yml`, each defaulting to today's, so a repository named differently can use the flow.
+
+### Changed
+
+- `bin/release` runs the [release_flow](https://github.com/dschmura/release_flow) gem, the same flow published for any GitHub repository; a fork still finds its template through `.fork.yml`.
+
 ## v2026.10.31-3
 
 ### Fixed

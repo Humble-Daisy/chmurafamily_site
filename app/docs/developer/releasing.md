@@ -585,7 +585,8 @@ every step.
 
 Four kinds of lever move a release along.
 
-**`bin/release` does the work.** It wraps `git` and the GitHub CLI: `prepare`
+**`bin/release` does the work.** It runs the [release_flow](https://github.com/dschmura/release_flow)
+gem, which wraps `git` and the GitHub CLI: `prepare`
 names the release in the changelog and opens that as a PR into `next`, `cut`
 pushes `release/<name>` and opens its PR into `main`, and `ship` merges it,
 tags it and opens the merge-back. A person and a workflow run the same
@@ -645,14 +646,31 @@ The flow is a default, not a requirement. The branch rules live in
 `config/github/rulesets/`, the checks in `.github/workflows/ci.yml` (which
 `bin/release cut` reads by name), the deploys in `.github/workflows/deploy.yml`, the
 automatic start in `.github/workflows/next_release.yml`, the
-steps in `bin/release`, and this page, the release template in
+steps in the release_flow gem behind `bin/release`, and this page, the release template in
 `.github/PULL_REQUEST_TEMPLATE/release.md` and the PR template in
 `.github/PULL_REQUEST_TEMPLATE.md` describe them. Change all of them
 together.
 
+`bin/release` takes its names from `.release_flow.yml` at the repository's
+root. A setting the file leaves out takes the gem's default:
+
+| Setting | Here | What it names |
+| --- | --- | --- |
+| `integration_branch` | `next` | the branch PRs merge into |
+| `production_branch` | `main` | the branch production deploys |
+| `ci_workflow` | `ci.yml` | the workflow `cut` waits on |
+| `staging_workflow` | `deploy.yml` | the workflow whose deploys `ship` reads |
+| `guide` | `/docs/developer/releasing` | the page `bin/release --help` points to |
+| `template` | from `.fork.yml` in a fork | the GitHub repository this one forks, as `owner/repo` |
+
+A setting it doesn't know stops `bin/release` with the list of those it
+does. The workflow `next_release.yml` and the branch rules name the branches
+too, so rename them there as well.
+
 The changelog and release-name convention is separate from the flow. It lives
-in `lib/release_changelog.rb`, and `bin/release` reads it only through that
-module's public methods. A fork that keeps its changelog another way replaces
-that file, keeps the method signatures, and leaves the rest alone. In a fork,
-`bin/release` also reads `template_url` from `.fork.yml`, which `bin/fork`
-writes.
+in the gem's `ReleaseFlow::Changelog`, and the flow reads it only through
+that module's public methods. A fork that keeps its changelog another way
+reopens that module in `bin/release`, after `require "release_flow"`, and
+keeps the method signatures. In a fork, `bin/release` reads the template
+from `template_url` in `.fork.yml`, which `bin/fork` writes, unless
+`.release_flow.yml` names one.

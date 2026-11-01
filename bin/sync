@@ -9,7 +9,7 @@ require "open3"
 require "yaml"
 require_relative "../lib/clean_git_env"
 require_relative "../lib/github_origin"
-require_relative "../lib/release_changelog"
+require "release_flow"
 
 class Sync
   class Error < StandardError; end
@@ -76,10 +76,10 @@ class Sync
 
   # Union-merging two changelogs files the template's lines into the fork's shipped releases.
   def keep_our_changelog(latest, entries)
-    fragment = "#{ReleaseChangelog::FRAGMENTS}/template-v#{latest}.md"
+    fragment = "#{ReleaseFlow::Changelog::FRAGMENTS}/template-v#{latest}.md"
     File.write(File.join(@root, "CHANGELOG.md"), git("show", "HEAD:CHANGELOG.md", strip: false))
-    FileUtils.mkdir_p(File.join(@root, ReleaseChangelog::FRAGMENTS))
-    File.write(File.join(@root, fragment), ReleaseChangelog.fragment("Changed", entries))
+    FileUtils.mkdir_p(File.join(@root, ReleaseFlow::Changelog::FRAGMENTS))
+    File.write(File.join(@root, fragment), ReleaseFlow::Changelog.fragment("Changed", entries))
     git("add", "CHANGELOG.md", fragment)
   end
 
@@ -95,7 +95,7 @@ class Sync
   def template_releases
     refs = git("ls-remote", "--tags", "upstream").lines.map(&:split)
     refs.sort_by { |_, ref| ref.end_with?("^{}") ? 1 : 0 }
-        .to_h { |sha, ref| [ ref[%r{\Arefs/tags/v(#{ReleaseChangelog::NAME})(?:\^\{\})?\z}, 1], sha ] }
+        .to_h { |sha, ref| [ ref[%r{\Arefs/tags/v(#{ReleaseFlow::Changelog::NAME})(?:\^\{\})?\z}, 1], sha ] }
         .except(nil)
         .sort_by { |name, _| name.split("-").then { |date, n| [ date, n.to_i ] } }
   end
@@ -129,7 +129,7 @@ end
 if $PROGRAM_NAME == __FILE__
   begin
     Sync.new(root: File.expand_path("..", __dir__)).run
-  rescue Sync::Error, ReleaseChangelog::Error => e
+  rescue Sync::Error, ReleaseFlow::Error => e
     abort("bin/sync: #{e.message}")
   end
 end
