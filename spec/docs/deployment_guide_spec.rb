@@ -22,7 +22,7 @@ RSpec.describe "the deployment guide" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, ".kamal"))
       File.write(File.join(dir, ".kamal/secrets"), fenced.("bash", "fnox get").to_s)
-      File.write(File.join(dir, ".kamal/secrets.staging"), fenced.("bash", "fnox -P staging get").to_s)
+      File.write(File.join(dir, ".kamal/secrets.staging"), fenced.("bash", "fnox --profile staging get").to_s)
       fnox = File.join(dir, "fnox")
       File.write(fnox, "#!/bin/sh\necho \"decrypted $*\"\n")
       File.chmod(0o755, fnox)
@@ -36,8 +36,19 @@ RSpec.describe "the deployment guide" do
       end
 
       expect(production).to eq("decrypted get RAILS_MASTER_KEY")
-      expect(staging).to eq("decrypted -P staging get RAILS_MASTER_KEY")
+      expect(staging).to eq("decrypted --profile staging get RAILS_MASTER_KEY")
     end
+  end
+
+  it "keeps production's key under a provider that staging's identities can't open" do
+    stored = guide.scan(/^fnox set RAILS_MASTER_KEY --provider (\S+)(.*)$/)
+    production = stored.reject { |_, rest| rest.include?("--profile") }.map(&:first)
+    staging = stored.select { |_, rest| rest.include?("--profile staging") }.map(&:first)
+
+    expect(production.size).to eq(1)
+    expect(staging.size).to eq(1)
+    expect(production).not_to eq(staging)
+    expect(fenced.("toml", "recipients")).to include("[providers.#{production.first}]", "[providers.#{staging.first}]")
   end
 
   it "switches to ghcr.io with a registry block Kamal accepts" do
