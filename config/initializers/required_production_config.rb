@@ -30,14 +30,16 @@ module RequiredProductionConfig
     raise <<~MSG
       Production preflight failed: #{problem}.
 
-      The database is backed up every hour to an S3-compatible bucket. Without one,
-      the app boots, /up reports healthy, and a lost disk takes every account with it.
+      The database is backed up every hour. Without somewhere to put it, the app
+      boots, /up reports healthy, and a lost disk takes every account with it.
 
-      Fix: create a bucket and a key for it, then
-        - OBJECT_STORAGE_BUCKET and OBJECT_STORAGE_REGION (and OBJECT_STORAGE_ENDPOINT
-          for anything but AWS): under env.clear in config/deploy.yml (Kamal), or the environment
-        - object_storage.access_key_id and object_storage.secret_access_key:
-          bin/rails credentials:edit --environment production, then redeploy
+      Fix, either way under env.clear in config/deploy.yml (Kamal), or the environment:
+        - An S3-compatible bucket, which survives losing the whole site:
+          OBJECT_STORAGE_BUCKET and OBJECT_STORAGE_REGION (and OBJECT_STORAGE_ENDPOINT
+          for anything but AWS), plus object_storage.access_key_id and
+          object_storage.secret_access_key in bin/rails credentials:edit --environment production
+        - Or a folder on another disk, such as a NAS mounted on the host and passed in
+          as a volume: BACKUP_PATH
 
       Details: /docs/developer/deployment (Back up the database section).
       Opting out for good: git rm config/initializers/required_production_config.rb
@@ -45,6 +47,10 @@ module RequiredProductionConfig
   end
 
   def self.backups_problem(env, credentials)
+    path, bucket = env.values_at("BACKUP_PATH", "OBJECT_STORAGE_BUCKET").map { |value| value.to_s.strip }
+    return "BACKUP_PATH and OBJECT_STORAGE_BUCKET are both set; a backup goes to one of them" if path.present? && bucket.present?
+    return if path.present?
+
     unset = %w[OBJECT_STORAGE_BUCKET OBJECT_STORAGE_REGION].find { |name| env[name].to_s.strip.empty? }
     return "#{unset} is unset" if unset
 

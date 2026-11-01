@@ -157,6 +157,16 @@ RSpec.describe RequiredProductionConfig do
           .to raise_error(RuntimeError, /object_storage\.access_key_id and object_storage\.secret_access_key are unset/)
       end
 
+      it "accepts a mounted folder in place of a bucket" do
+        expect { described_class.check!(ready.merge("BACKUP_PATH" => "/backups"), login) }
+          .not_to raise_error
+      end
+
+      it "refuses a folder and a bucket at once, since a backup goes to one place" do
+        expect { described_class.check!(ready.merge(backups, "BACKUP_PATH" => "/backups"), login.merge(storage)) }
+          .to raise_error(RuntimeError, /BACKUP_PATH and OBJECT_STORAGE_BUCKET are both set/)
+      end
+
       it "names the fix, the doc and the opt-out in the message" do
         described_class.check!(ready, login)
         raise "expected check! to raise"
@@ -164,6 +174,7 @@ RSpec.describe RequiredProductionConfig do
         expect(e.message).to include("credentials:edit --environment production")
         expect(e.message).to include("/docs/developer/deployment")
         expect(e.message).to include("git rm config/initializers/required_production_config.rb")
+        expect(e.message).to include("BACKUP_PATH")
       end
     end
   end

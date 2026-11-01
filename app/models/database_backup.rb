@@ -4,11 +4,16 @@ class DatabaseBackup
   class Missing < StandardError; end
   class Corrupt < StandardError; end
 
+  def self.destination(env = ENV)
+    return Bucket.new if env["BACKUP_PATH"].blank?
+
+    Folder.new(env["BACKUP_PATH"], retention: env.fetch("BACKUP_RETENTION_DAYS", 30).to_i.days, apart_from: Rails.root.join("storage"))
+  end
+
   def initialize(database: Rails.root.join(ActiveRecord::Base.connection_db_config.database),
-                 service: ActiveStorage::Blob.services.fetch(:object_storage),
-                 deployment: DeployCredentials.deployment)
+                 destination: self.class.destination, deployment: DeployCredentials.deployment)
     @database = Pathname(database)
-    @service = service
+    @destination = destination
     @prefix = "backups/#{deployment}"
   end
 
@@ -20,15 +25,16 @@ class DatabaseBackup
       SQLite3::Database.new(@database.to_s) { |db| db.execute("VACUUM INTO ?", [ copy ]) }
       check_integrity!(copy)
       Zlib::GzipWriter.open("#{copy}.gz") { |gzip| File.open(copy, "rb") { |file| IO.copy_stream(file, gzip) } }
-      File.open("#{copy}.gz", "rb") { |file| @service.upload(key, file) }
+      File.open("#{copy}.gz", "rb") { |file| @destination.upload(key, file) }
     end
 
-    @service.upload(latest_pointer, StringIO.new(key))
+    @destination.upload(latest_pointer, StringIO.new(key))
+    @destination.prune(@prefix, keep: key)
     key
   end
 
   def latest
-    @service.download(latest_pointer)
+    @destination.download(latest_pointer)
   rescue ActiveStorage::FileNotFoundError
     nil
   end
@@ -38,7 +44,7 @@ class DatabaseBackup
 
     Dir.mktmpdir(nil, @database.dirname) do |dir|
       restored = File.join(dir, "restored.sqlite3")
-      File.open("#{restored}.gz", "wb") { |file| @service.download(key) { |chunk| file.write(chunk) } }
+      File.open("#{restored}.gz", "wb") { |file| @destination.download(key) { |chunk| file.write(chunk) } }
       Zlib::GzipReader.open("#{restored}.gz") { |gzip| File.open(restored, "wb") { |file| IO.copy_stream(gzip, file) } }
       check_integrity!(restored)
 

@@ -4,9 +4,9 @@ require "rails_helper"
 
 RSpec.describe DatabaseBackup do
   let(:dir) { Pathname.new(Dir.mktmpdir) }
-  let(:service) { ActiveStorage::Service::DiskService.new(root: dir.join("bucket").to_s) }
+  let(:service) { DatabaseBackup::Bucket.new(ActiveStorage::Service::DiskService.new(root: dir.join("bucket").to_s)) }
   let(:database) { dir.join("production.sqlite3") }
-  let(:backup) { described_class.new(database: database, service: service, deployment: "production") }
+  let(:backup) { described_class.new(database: database, destination: service, deployment: "production") }
 
   def write_rows(path, *names)
     SQLite3::Database.new(path.to_s) do |db|
@@ -45,12 +45,36 @@ RSpec.describe DatabaseBackup do
 
     it "keeps one deployment's latest apart from another's" do
       write_rows(database, "ada")
-      staging = described_class.new(database: database, service: service, deployment: "staging")
+      staging = described_class.new(database: database, destination: service, deployment: "staging")
 
       production_key = backup.take!
       staging.take!
 
       expect(backup.latest).to eq(production_key)
+    end
+  end
+
+  describe ".destination" do
+    it "is the object_storage bucket by default" do
+      expect(described_class.destination({})).to be_a(DatabaseBackup::Bucket)
+    end
+
+    it "is a folder when BACKUP_PATH names one, kept for BACKUP_RETENTION_DAYS" do
+      destination = described_class.destination({ "BACKUP_PATH" => dir.to_s, "BACKUP_RETENTION_DAYS" => "7" })
+
+      expect(destination).to be_a(DatabaseBackup::Folder)
+      expect(destination.retention).to eq(7.days)
+    end
+  end
+
+  describe "pruning" do
+    it "asks the destination to prune after each backup, keeping the new one" do
+      write_rows(database, "ada")
+      allow(service).to receive(:prune)
+
+      key = backup.take!
+
+      expect(service).to have_received(:prune).with("backups/production", keep: key)
     end
   end
 

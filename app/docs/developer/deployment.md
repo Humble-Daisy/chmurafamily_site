@@ -72,10 +72,10 @@ Rent a Linux server (a current Ubuntu LTS image works) and note whether it is
   Only when the fingerprints match, add `server.known_hosts` to your
   `~/.ssh/known_hosts`. Keep the file: CI needs it in
   [step 6](#6-deploy-from-ci). A staging server gets its own.
-- **A bucket for backups.** The app backs its database up every hour to any
-  S3-compatible bucket, and production refuses to boot without one. Create
-  the bucket with a different company from your server's, plus a key for it
-  and a rule that deletes backups after 30 days
+- **Somewhere for backups.** The app backs its database up every hour, and
+  production refuses to boot until it has somewhere to put them: an
+  S3-compatible bucket with a different company from your server's, which
+  survives losing the whole site, or a folder on another disk, such as a NAS
   ([Back up the database](#back-up-the-database)).
 
 Check: `ssh root@<server-ip> docker version` prints the server's Docker
@@ -118,7 +118,8 @@ env:
   refuses to boot without it ([Production preflight](#production-preflight)).
 - **`OBJECT_STORAGE_*`** name the backup bucket from step 1. The region and
   endpoint depend on the provider; [Back up the database](#back-up-the-database)
-  lists them.
+  lists them. Backing up to a folder instead, set `BACKUP_PATH` and leave these
+  out.
 - **`registry:`** stays as shipped. `localhost:5555` is Kamal's local
   registry: Kamal runs a registry on the machine doing the deploy, and the
   server pulls the new image from it through the deploy's SSH connection. No
@@ -138,8 +139,8 @@ haven't made the production credentials yet, do it now
 
 1. `bin/rails credentials:edit --environment production` creates the key and
    the encrypted file.
-2. Paste in the block `bin/rails db:encryption:init` prints, and the backup
-   bucket's key from step 1:
+2. Paste in the block `bin/rails db:encryption:init` prints and, if you back
+   up to a bucket, its key from step 1:
 
    ```yaml
    object_storage:
@@ -147,7 +148,7 @@ haven't made the production credentials yet, do it now
      secret_access_key: ...
    ```
 
-   Production refuses to boot without either.
+   Production refuses to boot without them.
 3. Commit `config/credentials/production.yml.enc`. Kamal builds the image from
    a clone of the commit, so anything uncommitted never reaches the server; the
    key stays out of git.
@@ -395,9 +396,9 @@ runner joins that network first: [SSH over a private network](#ssh-over-a-privat
 
 Every hour, `DatabaseBackupJob` copies the primary database with SQLite's own
 `VACUUM INTO`, which takes a consistent copy while the app keeps writing,
-checks the copy with SQLite's integrity check, compresses it, and uploads it
-to the `object_storage` bucket. A dead disk or a bad migration costs at most
-the last hour.
+checks the copy with SQLite's integrity check, compresses it, and stores it in
+an S3-compatible bucket or a folder on another disk. A dead disk or a bad
+migration costs at most the last hour.
 
 - **Backed up:** `storage/production.sqlite3`, which holds every account,
   workspace and record.
@@ -437,6 +438,40 @@ Each backup is `backups/<deployment>/<time>.sqlite3.gz`, and
 `backups/<deployment>/latest` names the newest. The deployment is
 `production`, or the credentials a deploy runs on (`staging`), so staging can
 share the bucket without touching production's backups.
+
+### Or a folder on another disk
+
+A NAS, or a fireproof drive such as an ioSafe, on your own network works too.
+Mount it on the server so it comes back at boot (NFS or SMB in `/etc/fstab`),
+pass it into the container, and point `BACKUP_PATH` at it in
+`config/deploy.yml`:
+
+```yaml
+volumes:
+  - "modelrails_base_storage:/rails/storage"
+  - "/mnt/backups:/backups"
+
+env:
+  clear:
+    BACKUP_PATH: /backups
+```
+
+- **Writable by the app:** the container runs as user 1000, so the mounted
+  folder must let uid 1000 write.
+- **Retention:** after each backup the app deletes that deployment's backups
+  older than `BACKUP_RETENTION_DAYS`, 30 unless you set it. That means the
+  server can delete its own backups, so turn on the NAS's snapshots, which the
+  server can't reach, against someone who breaks in.
+- **The unmounted-drive trap:** when the drive isn't mounted, `/mnt/backups` is
+  an ordinary folder on the server's own disk. The backup job checks for that
+  and fails every hour until the drive is back, rather than writing backups
+  that would die with the disk.
+- **What it doesn't survive:** a fire, flood or theft that takes the whole
+  site, unless the drive is built for it or the NAS also copies the backups to
+  a bucket somewhere else.
+
+The backups sit in the folder as ordinary files, under
+`backups/<deployment>/`, and the restore below works the same way.
 
 ### Check it runs
 
@@ -786,10 +821,10 @@ proxy:
 With `ssl: false`, kamal-proxy forwards `X-Forwarded-Proto`, and the shipped
 Rails settings stay as they are ([SSL configuration](#ssl-configuration-paired-changes-required)).
 
-**Its data is backed up off the host.** The hourly backups go to a bucket
-with a provider elsewhere ([Back up the database](#back-up-the-database)). A
-bucket on the same host, such as Garage, can hold a second copy, never the
-only one, since it dies with the host. A restore has been tested.
+**Its data is backed up off the machine**, to a bucket elsewhere or to a NAS
+or fireproof drive on your network ([Back up the database](#back-up-the-database)).
+A copy on the same machine, such as a Garage bucket there, can only ever be a
+second copy, since it dies with the machine. A restore has been tested.
 
 **Images are built for its architecture.** When the machine running Kamal
 differs, as GitHub's x86 runners do from an arm64 host, either build on the
