@@ -1,0 +1,1 @@
+- `bin/setup` installs the Lefthook git hooks, so a new clone checks its commits and pushes without a separate `lefthook install`.
