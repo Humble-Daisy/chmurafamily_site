@@ -290,6 +290,12 @@ place. It names any other ruleset on the repo, which you reconcile by hand.
   `main`.
 - **Plan limits.** GitHub Free applies rulesets to public repositories only. On
   a private one the script reports each refused ruleset and exits non-zero.
+- **Turn on Dependabot alerts and security updates** in the repository's
+  security settings. A repository made with GitHub's Fork button starts with
+  both off, so `.github/dependabot.yml` alone opens no PRs.
+- **When bundler-audit goes red between syncs**, a new advisory has landed
+  against a gem you already have. Bump only the gems it names:
+  `bundle update --conservative <gem> <gem>`, then rerun `bin/bundler-audit`.
 
 Cutting, reviewing and shipping a release, hotfixes, and the merge-back are in
 [Releasing](releasing). To change the flow, edit the JSON files, or replace the
