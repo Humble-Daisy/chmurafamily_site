@@ -515,10 +515,14 @@ is a failed `DatabaseBackupJob`; the next scheduled run tries again.
 A restore replaces the live database, so the app stops for it:
 
 ```bash
+bin/kamal app version                           # note the running version
 bin/kamal app stop
 bin/kamal app exec "bin/rails backup:restore"   # the latest backup
-bin/kamal app start
+bin/kamal app start --version <that version>
 ```
+
+`app start` on its own starts your checkout's commit, and fails with "did
+the container boot?" once your branch has moved past what's deployed.
 
 To go further back, name a backup from the folder or the bucket's listing:
 
@@ -567,12 +571,23 @@ recipients and ciphertext into every fork. Git and Docker already ignore
 
 The first person installs the tools and makes an identity:
 
+```toml
+# mise.toml: exact versions, in this form, beside the template's two tools
+age = "1.3.2"
+fnox = "1.45.0"
+```
+
 ```bash
-mise use fnox age && mise lock fnox age
+mise install && mise lock
 mkdir -p ~/.config/fnox
 age-keygen -o ~/.config/fnox/age.txt    # prints your recipient, age1…
 fnox init --skip-wizard
 ```
+
+A template invariant reads only the `tool = "X.Y.Z"` form, and checks that
+`mise.lock` locks each version. It also checks that the workflow audit
+installs exactly `mise.toml`'s tools, so add `fnox age` to `install_args` in
+`.github/workflows/workflow_audit.yml`.
 
 Replace the new `fnox.toml` with two recipient lists, one per environment.
 Everyone who can decrypt a value under one provider can decrypt all of them,
@@ -602,18 +617,24 @@ fnox set RAILS_MASTER_KEY --provider age-production                  # productio
 fnox set RAILS_MASTER_KEY --provider age-staging --profile staging   # staging.key
 ```
 
-Then read the key through fnox in `.kamal/secrets`, replacing its
-`RAILS_MASTER_KEY` line:
+Then read the key through fnox in `.kamal/secrets`, between the environment
+and the key file in its `RAILS_MASTER_KEY` line:
 
 ```bash
-RAILS_MASTER_KEY=$(fnox get RAILS_MASTER_KEY)
+RAILS_MASTER_KEY=$(printenv RAILS_MASTER_KEY | grep . || fnox get RAILS_MASTER_KEY 2>/dev/null || cat config/credentials/production.key)
 ```
 
 and in `.kamal/secrets.staging`:
 
 ```bash
-RAILS_MASTER_KEY=$(fnox --profile staging get RAILS_MASTER_KEY)
+RAILS_MASTER_KEY=$(printenv RAILS_MASTER_KEY | grep . || fnox --profile staging get RAILS_MASTER_KEY 2>/dev/null || cat config/credentials/staging.key)
 ```
+
+The order is the contract `spec/config/kamal_secrets_spec.rb` holds: the
+environment first, then fnox, then the key file. A bare
+`$(fnox get RAILS_MASTER_KEY)` fails three of its examples. Keep `printenv`,
+not `$RAILS_MASTER_KEY`: Kamal substitutes `$VAR` inside `$(...)` itself, so
+never put a secret's variable in a command substitution.
 
 Commit `fnox.toml`, `mise.toml`, `mise.lock` and the secrets files. Check:
 `fnox check --all` passes, and `bin/kamal deploy` works as before.
@@ -627,9 +648,13 @@ Commit `fnox.toml`, `mise.toml`, `mise.lock` and the secrets files. Check:
    they deploy, and re-encrypt what changed:
 
    ```bash
-   fnox reencrypt --provider age-production
-   fnox reencrypt --provider age-staging --profile staging
+   fnox reencrypt --provider age-production --force
+   fnox reencrypt --provider age-staging --profile staging --force
    ```
+
+   Without `--force` it waits at a confirmation prompt, which hangs a script.
+   With two or more recipients the values become `fnox-age-batch-v1`, which
+   the `age` CLI can't read, so check them with `fnox get`, not `age`.
 
 3. You commit; they pull and run `fnox check --all`.
 4. Add their SSH public key to the server's `~/.ssh/authorized_keys`. If SSH is
@@ -763,7 +788,21 @@ cloud server. This recipe uses Tailscale; WireGuard works too, with more setup.
    Keep any rules you already rely on.
 3. Point `servers.web.hosts` at the server's Tailscale name, and check the
    host key over it as in step 1. That `ssh-keyscan` line is
-   `SSH_KNOWN_HOSTS` now.
+   `SSH_KNOWN_HOSTS` now. In a public repository the name is private, so
+   store it with fnox, `fnox set KAMAL_HOST --provider age-production`, and
+   read it in `config/deploy.yml` from a comment line, which Kamal's ERB still
+   runs:
+
+   ```yaml
+   # <% deploy_host = ENV.fetch("KAMAL_HOST") { `fnox get KAMAL_HOST 2>/dev/null`[/\S+/] || "deploy-host.invalid" } %>
+   servers:
+     web:
+       hosts:
+         - <%= deploy_host %>
+   ```
+
+   Without fnox the name is `deploy-host.invalid`, which never resolves: the
+   specs still load the file, and a deploy fails at SSH.
 4. Have CI join on every run. In Tailscale's admin console, create an OAuth
    client with the `auth_keys` scope and the tag `tag:ci`, store its ID and
    secret in each GitHub environment as `TS_OAUTH_CLIENT_ID` and

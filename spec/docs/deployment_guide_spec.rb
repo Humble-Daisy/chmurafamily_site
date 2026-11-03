@@ -27,16 +27,45 @@ RSpec.describe "the deployment guide" do
       File.write(fnox, "#!/bin/sh\necho \"decrypted $*\"\n")
       File.chmod(0o755, fnox)
 
+      original = ENV.fetch("RAILS_MASTER_KEY", nil)
       path = ENV.fetch("PATH")
       production, staging = begin
         ENV["PATH"] = "#{dir}:#{path}"
+        ENV.delete("RAILS_MASTER_KEY")
         Dir.chdir(dir) { [ Kamal::Secrets.new["RAILS_MASTER_KEY"], Kamal::Secrets.new(destination: "staging")["RAILS_MASTER_KEY"] ] }
       ensure
         ENV["PATH"] = path
+        original.nil? ? ENV.delete("RAILS_MASTER_KEY") : ENV["RAILS_MASTER_KEY"] = original
       end
 
       expect(production).to eq("decrypted get RAILS_MASTER_KEY")
       expect(staging).to eq("decrypted --profile staging get RAILS_MASTER_KEY")
+    end
+  end
+
+  it "keeps the secrets files' order around fnox: the environment first, the key file last" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, ".kamal"))
+      FileUtils.mkdir_p(File.join(dir, "config/credentials"))
+      File.write(File.join(dir, ".kamal/secrets"), fenced.("bash", "fnox get").to_s)
+      File.write(File.join(dir, "config/credentials/production.key"), "key-from-file\n")
+      original = ENV.fetch("RAILS_MASTER_KEY", nil)
+      path = ENV.fetch("PATH")
+      from_env, from_file = begin
+        ENV["PATH"] = "#{dir}:#{path}"
+        Dir.chdir(dir) do
+          ENV["RAILS_MASTER_KEY"] = "key-from-env"
+          env_key = Kamal::Secrets.new["RAILS_MASTER_KEY"]
+          ENV.delete("RAILS_MASTER_KEY")
+          [ env_key, Kamal::Secrets.new["RAILS_MASTER_KEY"] ]
+        end
+      ensure
+        ENV["PATH"] = path
+        original.nil? ? ENV.delete("RAILS_MASTER_KEY") : ENV["RAILS_MASTER_KEY"] = original
+      end
+
+      expect(from_env).to eq("key-from-env")
+      expect(from_file).to eq("key-from-file")
     end
   end
 
