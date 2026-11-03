@@ -1,0 +1,1 @@
+- `bin/sync` points `gh` at the fork, as `bin/setup` does, so in a clone set up before setup did that, `gh pr create` stops opening PRs against the template.

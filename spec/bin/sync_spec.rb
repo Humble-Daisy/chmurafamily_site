@@ -119,6 +119,15 @@ RSpec.describe Sync do
     expect(calls).to include("CALL pr merge https://github.com/me/app/pull/7 --auto --merge")
   end
 
+  it "points gh at the fork, as bin/setup does, for a clone set up before setup did" do
+    setup_repos
+    template_release("2026.10.30")
+
+    run_sync
+
+    expect(git("config", "remote.origin.gh-resolved")).to eq("base")
+  end
+
   it "lists only the releases next doesn't have yet" do
     setup_repos
     template_release("2026.10.30")

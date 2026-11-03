@@ -469,7 +469,8 @@ bin/sync
 
 If `next` already has the template's latest release, it says so and stops.
 It needs a clean working tree, an `upstream` remote (`bin/setup` adds it) and
-the GitHub CLI, signed in.
+the GitHub CLI, signed in. Like `bin/setup`, it points `gh` at your fork, not
+the template, so a clone set up before setup did that is fixed on its next sync.
 
 **A fork made before `bin/sync` existed doesn't have it yet.** Its first sync
 brings it in, so run that one from the template's copy. It needs the
