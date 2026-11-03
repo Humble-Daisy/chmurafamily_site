@@ -161,9 +161,8 @@ bin/setup
 remote (push disabled), activates the merge driver, and writes the fork's
 recorded tenancy preset into their `.env`. Those three things are per-clone, not
 per-fork, which is why they live in setup rather than in the one-time script.
-The git hooks are not among them: `bundle exec lefthook install` is a separate
-one-time step per clone (see [Getting started](getting-started#gate-1-local-lefthook-pre-push)),
-and until it runs a push runs nothing.
+It also installs the git hooks (see [Getting started](getting-started#gate-1-local-lefthook-pre-push));
+a clone that skipped `bin/setup` checks nothing until CI does.
 
 > Teammates need **read access to the upstream template repository** for the
 > remote to be useful. If your template is private, grant it before they try to
