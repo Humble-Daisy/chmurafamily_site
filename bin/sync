@@ -31,6 +31,8 @@ class Sync
     template = template_repo
     raise Error, "there are uncommitted changes; commit or stash them, so the merge holds only the template's" unless git("status", "--porcelain", "--untracked-files=no").empty?
 
+    git("config", "remote.origin.gh-resolved", "base")
+
     git("fetch", "-q", "origin")
     releases = template_releases
     raise Error, "the template has no releases to bring in yet" if releases.empty?
