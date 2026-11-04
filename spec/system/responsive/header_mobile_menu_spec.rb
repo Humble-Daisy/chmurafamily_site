@@ -48,6 +48,17 @@ RSpec.describe "Shared header — mobile menu auto-close", type: :system, js: tr
     expect(has_hidden_class).to be(true)
   end
 
+  it "closes on Escape and hands focus back to the menu button" do
+    visit root_path
+    find("[data-mobile-menu-target='button']").click
+    expect(page).to have_css("[data-mobile-menu-target='menu']:not(.hidden)")
+
+    cdp_press("Escape")
+
+    expect(page).to have_css("[data-mobile-menu-target='menu'].hidden", visible: :all)
+    expect(page).to have_css("[data-mobile-menu-target='button'][aria-expanded='false']:focus")
+  end
+
   it "closes the panel when the user clicks anywhere outside the header" do
     visit root_path
 
