@@ -71,4 +71,21 @@ RSpec.describe "axe gate rule coverage", type: :system do
     # broken probe must not leak into it.
     page.execute_script('document.getElementById("a11y-gate-probe")?.remove()')
   end
+
+  # The open cookie banner is a role="dialog", so axe defers this rule instead of failing it (#1549).
+  it "fails a focusable aria-hidden control even when axe defers the rule for an open dialog" do
+    visit root_path
+    expect(page).to have_css(".biscuit-banner")
+    page.execute_script(<<~JS)
+      document.querySelector("main").insertAdjacentHTML(
+        "beforeend", '<button id="a11y-hidden-focus-probe" aria-hidden="true">Probe</button>'
+      )
+    JS
+
+    results = run_axe_audit(exclude: [], include: "#a11y-hidden-focus-probe")
+
+    expect(results["violations"].map { |v| v["id"] }).to include("aria-hidden-focus")
+  ensure
+    page.execute_script('document.getElementById("a11y-hidden-focus-probe")?.remove()')
+  end
 end
