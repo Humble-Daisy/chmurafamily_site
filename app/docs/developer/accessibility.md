@@ -55,6 +55,11 @@ Beyond axe's own rules, every audit also runs (2026-07 gate upgrade):
   (`elementsFromPoint`) and fails any interactive element that hits an
   image/canvas/video before any opaque background. Contrast over a raster
   is unknowable; give the control an opaque plate.
+- **`mc-one-h1`** — a whole-page audit of an app page needs exactly one
+  rendered `<h1>`. Component and mailer previews, mail audited in
+  `about:blank`, the draft harness, and any audit scoped with `include:` are
+  exempt. axe's own `page-has-heading-one` only asks for at least one, and it
+  fires on every preview host.
 
 ### Documented deviation: composite-widget interiors
 

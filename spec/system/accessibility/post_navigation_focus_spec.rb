@@ -21,6 +21,17 @@ RSpec.describe "Post-navigation focus management", type: :system do
     expect(page).to have_css("#main-content:focus")
   end
 
+  # Workspace pages render a different <main> in the same layout, so they need their own check.
+  it "moves focus to #main-content after navigating between workspace pages" do
+    user = create(:user)
+    sign_in_via_form(user)
+    visit workspace_path(user.personal_workspace)
+    click_link I18n.t("workspaces.sidebar.projects")
+
+    expect(page).to have_current_path(workspace_projects_path(user.personal_workspace))
+    expect(page).to have_css("#main-content:focus")
+  end
+
   it "leaves the browser's default focus alone on initial page load" do
     visit "/"
 
