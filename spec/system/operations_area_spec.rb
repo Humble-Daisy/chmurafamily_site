@@ -49,7 +49,7 @@ RSpec.describe "Operations area", type: :system do
     expect(page).to have_current_path(operations_workspace_path(workspace))
     expect(page).to have_text(owner.full_name)
     expect(page).to have_css(
-      "[aria-label='#{I18n.t('lifecycle_status.prefix')}: #{I18n.t('lifecycle_status.active')}']"
+      "span[data-variant='soft']", exact_text: "#{I18n.t('lifecycle_status.prefix')}: #{I18n.t('lifecycle_status.active')}", normalize_ws: true
     )
     expect(page).to have_button(I18n.t("operations.workspaces.show.suspend"))
     expect(axe_clean_in_both_themes?).to be(true), axe_violations_in_both_themes.join("\n")
@@ -59,7 +59,7 @@ RSpec.describe "Operations area", type: :system do
     expect(page).to have_text(I18n.t("operations.workspaces.suspensions.create.success"))
     expect(workspace.reload).to be_suspended
     expect(page).to have_css(
-      "[aria-label='#{I18n.t('lifecycle_status.prefix')}: #{I18n.t('lifecycle_status.suspended')}']"
+      "span[data-variant='soft']", exact_text: "#{I18n.t('lifecycle_status.prefix')}: #{I18n.t('lifecycle_status.suspended')}", normalize_ws: true
     )
     expect(page).to have_button(I18n.t("operations.workspaces.show.unsuspend"))
     expect(axe_clean_in_both_themes?).to be(true), axe_violations_in_both_themes.join("\n")
