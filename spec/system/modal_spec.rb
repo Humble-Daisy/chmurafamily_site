@@ -79,6 +79,19 @@ RSpec.describe "Modal system", type: :system do
       focused_id = page.evaluate_script("document.activeElement?.id")
       expect(focused_id).to eq("test-modal-trigger")
     end
+
+    it "moves focus to the main region when the opener left the page while it was open" do
+      page.execute_script("document.getElementById('test-modal-trigger').remove()")
+      click_button "Close"
+      expect(page).to have_no_css("dialog[open]")
+      expect(page.evaluate_script("document.activeElement?.id")).to eq("main-content")
+    end
+
+    it "moves focus to the main region when the dialog is torn out of the page while open" do
+      page.execute_script("document.getElementById('test-modal').closest('[data-controller~=\"modal\"]').remove()")
+      expect(page).to have_no_css("#test-modal", visible: :all)
+      expect(page.evaluate_script("document.activeElement?.id")).to eq("main-content")
+    end
   end
 
   describe "accessibility" do

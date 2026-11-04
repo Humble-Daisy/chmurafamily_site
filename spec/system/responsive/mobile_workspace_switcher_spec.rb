@@ -9,26 +9,12 @@ require "rails_helper"
 # id suffix, because the sidebar copy is hidden, not absent, and unsuffixed it
 # would duplicate every id (#1077). It replaced the inline list that used to
 # live in the hamburger; the hamburger is global chrome only now.
-#
-# Escape is dispatched to the menu controller directly, as the desktop spec
-# does — programmatic KeyboardEvent dispatch does not reach main-world
-# Stimulus listeners from the driver's context.
 RSpec.describe "Mobile workspace switcher — content column", type: :system, js: true do
   let(:user) { create(:user) }
   let!(:second_workspace) do
     ws = create(:workspace, max_members: 50)
     create(:membership, :owner, user: user, workspace: ws)
     ws
-  end
-
-  def send_mobile_switcher_key(key)
-    cdp_execute(<<~JS)
-      (function() {
-        var el = document.querySelector('#workspace-switcher-button-mobile').closest('[data-controller~="menu"]');
-        var c = window.Stimulus.getControllerForElementAndIdentifier(el, 'menu');
-        if (c) c.navigate(new KeyboardEvent('keydown', { key: '#{key}', bubbles: true }));
-      })()
-    JS
   end
 
   before do
@@ -121,7 +107,7 @@ RSpec.describe "Mobile workspace switcher — content column", type: :system, js
     find("#workspace-switcher-button-mobile").click
     expect(find("#workspace-switcher-button-mobile")["aria-expanded"]).to eq("true")
 
-    send_mobile_switcher_key("Escape")
+    cdp_press("Escape")
 
     expect(find("#workspace-switcher-button-mobile")["aria-expanded"]).to eq("false")
     expect(page).to have_no_css("#workspace-switcher-menu-mobile", visible: :visible)
