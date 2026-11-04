@@ -67,6 +67,9 @@ module AxeAccessibility
     landmark-main-is-top-level
   ].freeze
 
+  # Rules whose "incomplete" results fail like violations. A 2026-11-04 suite sweep found none of these deferred anywhere (#1549).
+  PROMOTED_INCOMPLETE_RULES = %w[aria-hidden-focus].freeze
+
   # target-size (2.5.8 AA, 24px) ships `enabled: false` in axe 4.x — the tag
   # alone never runs it. The 44px AAA floor (2.5.5) has NO axe rule at all;
   # the mc-target-size-44 custom check below covers it.
@@ -498,7 +501,8 @@ module AxeAccessibility
     # of the three promoted rules. The custom mc-* checks pushed by the JS above
     # carry no tags at all and are matched by neither clause, so they are named
     # explicitly rather than surviving by accident.
-    result["violations"] = Array(result["violations"]).select do |v|
+    promoted = Array(result["incomplete"]).select { |v| PROMOTED_INCOMPLETE_RULES.include?(v["id"]) }
+    result["violations"] = (Array(result["violations"]) + promoted).select do |v|
       (Array(v["tags"]) & AXE_TAG_SET).any? ||
         PROMOTED_BEST_PRACTICE_RULES.include?(v["id"]) ||
         v["id"].to_s.start_with?("mc-")
