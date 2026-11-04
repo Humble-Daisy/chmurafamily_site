@@ -7,13 +7,12 @@ module LifecycleHelper
     t("lifecycle_status.#{record.status}")
   end
 
-  # The badge form of the label, for the operations pages: one treatment
-  # wherever a status shows. aria-label because "Locked" alone says nothing
-  # about what it is the status of; warning tint for a lock only — the state
-  # an operator acts on.
+  # "Locked" alone doesn't say what is locked, so a screen reader also hears the
+  # prefix; aria-label on a role-less span is ignored, hence sr-only text.
   def lifecycle_status_badge(record, **attrs)
     label = lifecycle_status_label(record)
-    ui :badge, label, variant: :soft, tone: (record.suspended? ? :warning : :neutral),
-       "aria-label": "#{t('lifecycle_status.prefix')}: #{label}", **attrs
+    ui :badge, variant: :soft, tone: (record.suspended? ? :warning : :neutral), **attrs do
+      safe_join([ tag.span("#{t('lifecycle_status.prefix')}: ", class: "sr-only"), label ])
+    end
   end
 end

@@ -75,6 +75,7 @@
           class: [ "biscuit-preferences", ("biscuit-preferences--open" if consent.given?) ].compact.join(" "),
           data: { biscuit_target: "preferencesPanel" },
           hidden: !consent.given?,
+          role: "group",
           aria: { label: t("biscuit.banner.manage") } do %>
 
       <% Biscuit.configuration.categories.each do |key, opts| %>
