@@ -470,6 +470,14 @@ module AxeAccessibility
           }).map(el => ({ el, why: "focus lands on a hidden box and nothing visible paints on its focus: add a :focus-visible rule on its label, an ancestor, or a counterpart via :has()/sibling (WCAG 2.4.7)" }));
           pushCheck("mc-focus-indicator-hidden", "Visually hidden focusables need a visible element that paints on their focus (WCAG 2.4.7)", hiddenUnpainted);
 
+          // Component and mailer previews, mail loaded into about:blank and the draft harness are hosts, not pages, so they carry no heading of their own.
+          if (include.length === 0 && location.protocol !== "about:" && !/^\\/(rails\\/view_components|rails\\/mailers|lookbook|draft_harness)(\\/|$)/.test(location.pathname)) {
+            const h1s = [...document.querySelectorAll("h1")].filter(el => el.getClientRects().length > 0);
+            const extra = h1s.length > 1 ? h1s.map(el => ({ el, why: `one of ${h1s.length} <h1>s on the page` })) : [];
+            const missing = h1s.length === 0 ? [{ el: document.body, why: "the page has no <h1>" }] : [];
+            pushCheck("mc-one-h1", "An app page has exactly one <h1> naming it", extra.concat(missing));
+          }
+
           arguments[arguments.length - 1](JSON.stringify(results));
           } catch (__axeErr) {
             arguments[arguments.length - 1](JSON.stringify({
