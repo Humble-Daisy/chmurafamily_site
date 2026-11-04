@@ -30,7 +30,9 @@ RSpec.describe LifecycleHelper, type: :helper do
       html = Capybara.string(helper.lifecycle_status_badge(workspace))
       badge = html.find("span[data-variant='soft']", text: "Active")
       expect(badge[:"data-tone"]).to eq("neutral")
-      expect(badge[:"aria-label"]).to eq("#{I18n.t('lifecycle_status.prefix')}: Active")
+      expect(badge.text(normalize_ws: true)).to eq("#{I18n.t('lifecycle_status.prefix')}: Active")
+      expect(badge.find("span.sr-only").text).to start_with(I18n.t("lifecycle_status.prefix"))
+      expect(badge[:"aria-label"]).to be_nil
     end
 
     it "tints a locked record as a warning" do
