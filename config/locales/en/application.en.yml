@@ -54,7 +54,6 @@ en:
     mobile_menu:
       open: "Open menu"
       close: "Close menu"
-      aria_label: "Main menu"
   theme:
     light: "Light"
     dark: "Dark"

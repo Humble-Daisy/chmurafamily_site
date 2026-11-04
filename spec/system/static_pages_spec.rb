@@ -220,12 +220,8 @@ RSpec.describe "Static pages", type: :system do
   describe "contact page" do
     before { visit page_path(:contact) }
 
-    it "displays the page title" do
-      expect(page).to have_text(I18n.t("pages.contact.hero.title"))
-    end
-
-    it "displays the page heading" do
-      expect(page).to have_css("h1", text: I18n.t("pages.contact.title"))
+    it "heads the page with the hero title" do
+      expect(page).to have_css("h1", exact_text: I18n.t("pages.contact.hero.title"))
     end
 
     it "displays contact methods" do

@@ -30,9 +30,6 @@
           class: "mt-4 flex flex-wrap items-end gap-3" do |f| %>
       <input type="hidden" name="override" value="true">
       <div class="flex-1 min-w-[16rem]">
-        <%= f.label :timezone,
-              t("settings.appearance.timezone.label"),
-              class: "block text-sm font-medium text-text-heading mb-1" %>
       <%# Stays a bare f.select (#732, deliberate): grouped_options_for_select
           has no UI::Select options shape yet — optgroup support is
           modelrails_ui#162; convert both timezone selects when it lands. %>
@@ -41,7 +38,7 @@
                 timezone_options_for_select,
                 preferences.timezone
               ),
-              {},
+              { label: t("settings.appearance.timezone.label") },
               class: "form-input" %>
       </div>
       <%= f.submit t("settings.appearance.timezone.save") %>
