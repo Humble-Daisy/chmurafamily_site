@@ -204,8 +204,8 @@ RSpec.describe "Operations users", type: :request do
 
       get operations_user_path(target)
       list = Capybara.string(response.body).find("#ops-user-memberships")
-      expect(list.find("li", text: "Frozen")).to have_css("span[aria-label='#{I18n.t("lifecycle_status.prefix")}: #{I18n.t("lifecycle_status.suspended")}']")
-      expect(list.find("li", text: "Open")).to have_no_css("span[aria-label^='#{I18n.t("lifecycle_status.prefix")}']")
+      expect(list.find("li", text: "Frozen")).to have_css("span[data-variant='soft']", exact_text: "#{I18n.t("lifecycle_status.prefix")}: #{I18n.t("lifecycle_status.suspended")}")
+      expect(list.find("li", text: "Open")).to have_no_css("span.sr-only", text: I18n.t("lifecycle_status.prefix"))
     end
 
     it "shows the Operator badge, no Suspend form, and the revoke-first sentence linking to the roster" do
