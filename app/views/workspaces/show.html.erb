@@ -13,7 +13,7 @@
   <% end %>
   <%= turbo_stream_from @workspace %>
 
-  <%= render "shared/activity_feed",
-        activities: @activities,
-        top_margin: (@workspace.archived? ? "mt-8" : "mt-0") %>
+  <h1 class="<%= class_names("text-3xl font-bold text-text-heading", "mt-8" => @workspace.archived?) %>"><%= @workspace.name %></h1>
+
+  <%= render "shared/activity_feed", activities: @activities %>
 </div>
