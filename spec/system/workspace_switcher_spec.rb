@@ -7,13 +7,6 @@ require "rails_helper"
 # It therefore only exists on workspace pages — the sidebar is the switcher's
 # home, so this visits one rather than the workspaces index. The sidebar is
 # `hidden md:flex`; the default viewport satisfies that, no resize needed.
-#
-# Escape is dispatched via the menu controller's navigate handler directly,
-# matching the pattern in user_menu_spec.rb — programmatic KeyboardEvent dispatch
-# does not reach main-world Stimulus listeners from the driver's context.
-#
-# Per-spec axe runs AA locally; the AAA 7:1 audit is the CI-only wcag2aaa hook.
-# Do not claim AAA from a local run.
 RSpec.describe "Workspace switcher (sidebar)", type: :system do
   let(:user) { create(:user) }
   let(:axe_options) { { runOnly: { type: "tag", values: [ "wcag2aaa" ] } } }
@@ -21,18 +14,6 @@ RSpec.describe "Workspace switcher (sidebar)", type: :system do
     ws = create(:workspace)
     create(:membership, :owner, user: user, workspace: ws)
     ws
-  end
-
-  # Dispatch a KeyboardEvent directly to the menu Stimulus controller.
-  # Reuses the same technique as user_menu_spec.rb.
-  def send_switcher_key(key)
-    cdp_execute(<<~JS)
-      (function() {
-        var el = document.querySelector('#workspace-switcher-button').closest('[data-controller~="menu"]');
-        var c = window.Stimulus.getControllerForElementAndIdentifier(el, 'menu');
-        if (c) c.navigate(new KeyboardEvent('keydown', { key: '#{key}', bubbles: true }));
-      })()
-    JS
   end
 
   before do
@@ -61,7 +42,7 @@ RSpec.describe "Workspace switcher (sidebar)", type: :system do
     find("#workspace-switcher-button").click
     expect(find("#workspace-switcher-button")["aria-expanded"]).to eq("true")
 
-    send_switcher_key("Escape")
+    cdp_press("Escape")
 
     expect(find("#workspace-switcher-button")["aria-expanded"]).to eq("false")
     expect(page).to have_no_css("#workspace-switcher-menu", visible: :visible)
