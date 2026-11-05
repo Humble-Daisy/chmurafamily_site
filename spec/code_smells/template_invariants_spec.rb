@@ -1493,6 +1493,8 @@ RSpec.describe "Template invariants" do
       %w[
         app/views/pages/**
         app/controllers/pages_controller.rb
+        spec/system/pages/**
+        spec/requests/pages_spec.rb
         config/locales/en/pages.en.yml
         config/locales/en/brand.en.yml
         config/routes/app.rb

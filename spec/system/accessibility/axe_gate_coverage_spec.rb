@@ -14,7 +14,7 @@ require "rails_helper"
 # the project rule "system specs test real rendered HTML" does not apply.
 RSpec.describe "axe gate rule coverage", type: :system do
   it "selects the full A/AA/AAA rule stack, not just AAA-tagged rules" do
-    visit root_path
+    visit new_session_path
     inject_axe
 
     rule_ids = page.evaluate_script(
@@ -37,7 +37,7 @@ RSpec.describe "axe gate rule coverage", type: :system do
   # very spec green the entire time. A guard that tests the default while the
   # callers bypass the default is not a guard.
   it "cannot be narrowed below the cumulative stack by a caller-supplied runOnly" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       document.body.insertAdjacentHTML(
         "beforeend", '<input id="a11y-narrowing-probe" type="text">'
@@ -56,7 +56,7 @@ RSpec.describe "axe gate rule coverage", type: :system do
   end
 
   it "catches a seeded unlabeled input under the gate's default options" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       document.body.insertAdjacentHTML(
         "beforeend", '<input id="a11y-gate-probe" type="text">'
@@ -74,7 +74,7 @@ RSpec.describe "axe gate rule coverage", type: :system do
 
   # The open cookie banner is a role="dialog", so axe defers this rule instead of failing it (#1549).
   it "fails a focusable aria-hidden control even when axe defers the rule for an open dialog" do
-    visit root_path
+    visit new_session_path
     expect(page).to have_css(".biscuit-banner")
     page.execute_script(<<~JS)
       document.querySelector("main").insertAdjacentHTML(

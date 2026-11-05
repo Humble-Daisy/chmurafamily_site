@@ -16,7 +16,7 @@ RSpec.describe "User menu dropdown", type: :system do
 
   before do
     sign_in_via_form(user)
-    visit root_path # this file's old helper copy baked this in; the examples assume it
+    visit new_session_path # this file's old helper copy baked this in; the examples assume it
   end
 
   # #685: the user menu runs on the menu-pattern controller (APG menu-button),
@@ -268,7 +268,7 @@ RSpec.describe "User menu dropdown", type: :system do
   describe "unauthenticated" do
     it "shows sign in link instead of avatar" do
       Capybara.reset_sessions!
-      visit root_path
+      visit new_session_path
       expect(page).to have_link(I18n.t("navigation.sign_in"))
       expect(page).to have_no_css("#user-menu-button", visible: :visible)
     end

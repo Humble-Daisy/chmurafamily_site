@@ -23,7 +23,7 @@ RSpec.describe "Form draft key delivery" do
 
   context "signed out" do
     it "renders no form-draft meta tags" do
-      get root_path
+      get new_session_path
       doc = Capybara.string(response.body)
       expect(doc).to have_no_css('meta[name="form-draft-key"]', visible: :all)
       expect(doc).to have_no_css('meta[name="form-draft-scope"]', visible: :all)
