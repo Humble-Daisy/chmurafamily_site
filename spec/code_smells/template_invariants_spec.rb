@@ -961,11 +961,13 @@ RSpec.describe "Template invariants" do
 
       queues_value = workers.first["queues"]
       expect(queues_value).to be_an(Array),
-        "expected queues to be an explicit array (e.g., [default, mailers, low]) instead of " \
+        "expected queues to be an explicit array (e.g., [mailers, default, low]) instead of " \
         "the \"*\" wildcard — named queues give clear operational signals when one backs up. " \
         "Got: #{queues_value.inspect}"
       expect(queues_value).to include("mailers"),
         "expected `mailers` queue declared explicitly so mailer jobs are routable separately"
+      expect(queues_value.first).to eq("mailers"),
+        "expected `mailers` first so a sign-in link is claimed ahead of backups and sweeps"
     end
 
     it "recurring.yml routes digest_mailer to the mailers queue" do
