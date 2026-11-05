@@ -20,6 +20,8 @@ CHANGELOG.md merge=union
 # Inert in this repo (driver deliberately unset upstream).
 app/views/pages/** merge=ours
 app/controllers/pages_controller.rb merge=ours
+spec/system/pages/** merge=ours
+spec/requests/pages_spec.rb merge=ours
 config/locales/en/pages.en.yml merge=ours
 config/locales/en/brand.en.yml merge=ours
 config/routes/app.rb merge=ours

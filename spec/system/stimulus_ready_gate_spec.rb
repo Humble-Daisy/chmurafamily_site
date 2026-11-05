@@ -12,11 +12,11 @@ RSpec.describe "Stimulus readiness gate", type: :system do
   it "gates an ordinary app path, not just an allow-list" do
     expect(self).to receive(:wait_for_stimulus_controllers).at_least(:once).and_call_original
 
-    visit root_path
+    visit new_session_path
   end
 
   it "leaves every controller on the page connected once visit returns" do
-    visit root_path
+    visit new_session_path
 
     expect(all_stimulus_controllers_connected?).to be(true)
   end
@@ -25,7 +25,7 @@ RSpec.describe "Stimulus readiness gate", type: :system do
   # must not raise — otherwise widening the gate would turn every
   # controller-less page into a 2.5s timeout failure.
   it "treats a page with no controllers as ready" do
-    visit root_path
+    visit new_session_path
     page.execute_script(
       "document.querySelectorAll('[data-controller]').forEach((e) => e.removeAttribute('data-controller'))"
     )
@@ -37,7 +37,7 @@ RSpec.describe "Stimulus readiness gate", type: :system do
   # The barrier's value is that an exhausted wait is distinguishable from a
   # satisfied one, and that the message names what never connected.
   it "raises and names the identifier when a controller never connects" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       const el = document.createElement("div");
       el.setAttribute("data-controller", "never-going-to-connect");

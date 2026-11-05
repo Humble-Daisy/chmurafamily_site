@@ -38,13 +38,13 @@ RSpec.describe "Workspace branding cascade", type: :request do
 
   describe "on non-workspace routes" do
     it "does not emit data-workspace-branded on the home page" do
-      get root_path
+      get new_session_path
       expect(response.body).not_to include("data-workspace-branded")
     end
 
     it "does not emit data-workspace-branded on the home page when signed in" do
       sign_in(user)
-      get root_path
+      get new_session_path
       expect(response.body).not_to include("data-workspace-branded")
     end
   end

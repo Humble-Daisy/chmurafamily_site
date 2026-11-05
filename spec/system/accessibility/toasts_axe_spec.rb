@@ -24,7 +24,7 @@ RSpec.describe "Toast containers — axe landmark audit", type: :system do
   end
 
   it "empty toast containers are axe-clean, chrome included (both themes)" do
-    visit page_path(:about)
+    visit "/docs"
     expect(page).to have_css("#toast-pills", visible: :all)
 
     expect(axe_clean_in_both_themes?).to be(true),

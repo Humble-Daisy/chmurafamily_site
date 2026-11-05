@@ -50,7 +50,7 @@ RSpec.describe "Notification broadcast frame persistence", type: :system do
 
   it "keeps refreshing the user-menu count across consecutive broadcasts" do
     user.notifications.destroy_all
-    visit root_path
+    visit new_session_path
     find("#user-menu-button").click
 
     deliver_security_notification

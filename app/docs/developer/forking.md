@@ -311,7 +311,8 @@ on every sync.
 | ---- | --------------- |
 | `config/locales/en/brand.en.yml` | Product name, description, copyright |
 | `config/locales/en/pages.en.yml` | Marketing copy for your pages |
-| `app/views/pages/**`, `app/controllers/pages_controller.rb` | Your marketing/static pages |
+| `app/views/pages/**`, `app/controllers/pages_controller.rb` | Your marketing/static pages. A layout of your own for them must render `shared/toasts`: email verification lands on `/` with its message |
+| `spec/system/pages/**`, `spec/requests/pages_spec.rb` | The tests for those pages — rewrite them with the pages |
 | `config/routes/app.rb` | Your product's routes (loaded by `draw(:app)`) |
 | `.rubocop/app.yml` | Your RuboCop overrides — turn a house cop off here, with the reason ([Getting started](getting-started#turning-a-house-cop-off-in-your-fork)) |
 | `config/markdowndocs_categories.local.yml` | Registers your own docs pages on this `/docs` index |

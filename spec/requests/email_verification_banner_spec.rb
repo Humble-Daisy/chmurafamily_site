@@ -4,7 +4,7 @@ RSpec.describe "Email verification banner", type: :request do
   it "shows the banner to a signed-in user with an unverified email" do
     user = create(:user, :unverified_email)
     sign_in(user)
-    get root_path
+    get workspaces_path
     expect(response.body).to include("verify-banner")
   end
 
@@ -13,7 +13,7 @@ RSpec.describe "Email verification banner", type: :request do
   it "renders as a labelled region, not a live region" do
     user = create(:user, :unverified_email)
     sign_in(user)
-    get root_path
+    get workspaces_path
     banner = Capybara.string(response.body).find("#verify-banner")
     expect(banner["role"]).to eq("region")
     expect(banner["aria-label"]).to be_present
@@ -23,7 +23,7 @@ RSpec.describe "Email verification banner", type: :request do
     user = create(:user, :unverified_email)
     user.authentications.email.first.update!(verified_at: Time.current)
     sign_in(user)
-    get root_path
+    get workspaces_path
     expect(response.body).not_to include("verify-banner")
   end
 end

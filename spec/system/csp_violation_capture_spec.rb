@@ -31,14 +31,14 @@ RSpec.describe "CSP violation capture harness", type: :system do
   end
 
   it "captures violations on the fresh page created after a session reset" do
-    visit root_path
+    visit new_session_path
     trigger_deliberate_violation
     expect(violations_captured_within(2)).to include(a_string_matching(/script-src/))
 
     Capybara.reset_sessions!
     install_csp_violation_listener
 
-    visit root_path
+    visit new_session_path
     trigger_deliberate_violation
     expect(violations_captured_within(2)).to include(a_string_matching(/script-src/))
   end

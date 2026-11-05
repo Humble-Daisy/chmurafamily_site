@@ -12,7 +12,7 @@ require "rails_helper"
 # the obvious "fix" for a future preview-host finding is to widen the promoted
 # list, which is exactly the burial the panel warned about.
 RSpec.describe "Promoted best-practice axe rules", type: :system do
-  before { visit root_path }
+  before { visit new_session_path }
 
   it "blocks a duplicate main landmark" do
     expect(axe_clean?).to be(true)
@@ -47,6 +47,6 @@ RSpec.describe "Promoted best-practice axe rules", type: :system do
 
     # Restore a real page for the teardown audit rather than leaving it a
     # heading-stripped mutant.
-    visit root_path
+    visit new_session_path
   end
 end

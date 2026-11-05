@@ -27,7 +27,7 @@ RSpec.describe "Axe transient violation message", type: :system do
   end
 
   it "names the rule the check actually saw, even when it has already cleared" do
-    visit root_path
+    visit new_session_path
 
     # only_first: the violation exists for the check and is gone by the message.
     planting("probe-transient", only_first: true) do
@@ -38,7 +38,7 @@ RSpec.describe "Axe transient violation message", type: :system do
   end
 
   it "still reports a violation that is stable across audits" do
-    visit root_path
+    visit new_session_path
 
     planting("probe-stable") do
       expect {
@@ -49,7 +49,7 @@ RSpec.describe "Axe transient violation message", type: :system do
 
   # No extra audits on a green run (#855).
   it "adds no audits to a green run" do
-    visit root_path
+    visit new_session_path
     ensure_light_mode
     baseline = axe_audit_run_count
 

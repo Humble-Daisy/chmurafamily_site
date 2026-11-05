@@ -35,7 +35,7 @@ RSpec.describe "Onboarding · invitees", type: :request do
     accept_as(member_role)
     sign_in(invitee)
 
-    get root_path
+    get new_session_path
     expect(response).not_to redirect_to(onboarding_path)
     get workspace_path(workspace)
     expect(response).to have_http_status(:ok)
