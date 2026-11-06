@@ -298,9 +298,11 @@ class MailSetup
     end
 
     def confirm(label, default:)
-      @output.print "#{label} [#{default ? "Y/n" : "y/N"}]: "
-      answer = read_echoed.strip
-      answer.empty? ? default : answer.match?(/\Ay/i)
+      loop do
+        @output.print "#{label} [#{default ? "Y/n" : "y/N"}]: "
+        answer = valid_text(read_echoed) or next
+        return answer.empty? ? default : answer.match?(/\Ay/i)
+      end
     end
 
     private
@@ -445,10 +447,10 @@ class MailSetup
     changes = KeyDecision.decide(root: @root, env: @env)
     @credentials ||= ProductionCredentials.new(root: @root, env: changes)
     check_readable!
-    @first_run = !@credentials.exists?
     confirm_replacing_root!
     open
     answers = ask
+    @writing = true
     unless write_credentials(answers[:login])
       say "The login couldn't be saved, so #{DEPLOY_FILE} wasn't touched. Run bin/rails credentials:edit --environment production to see why."
       return 1
@@ -458,7 +460,7 @@ class MailSetup
     say e.message
     1
   rescue Declined, Interrupt
-    say "\nStopped. Nothing was written."
+    say(@writing ? "\nStopped while saving. Run bin/mail-setup again to finish, then check git status." : "\nStopped. Nothing was written.")
     1
   rescue StandardError
     say "bin/mail-setup stopped on an unexpected error. The details stay hidden because they can contain a login."
@@ -548,7 +550,7 @@ class MailSetup
     warnings = swap_warnings(answers)
     outcome = write_deploy(values)
     if outcome == :failed
-      say "The edit to #{DEPLOY_FILE} didn't check out, so it's as it was. The login has changed, so set these by hand:"
+      say "The edit to #{DEPLOY_FILE} didn't check out, so it's as it was. Set these by hand:"
       values.each { |key, value| say "  #{key}=#{value}" }
       return 1
     end
@@ -560,7 +562,7 @@ class MailSetup
     values = DeployFile.values(deploy_text)
     ClosingMessage.text(
       provider: answers[:provider], address: answers[:address], port: answers[:port],
-      sender: answers[:sender] || current_sender, changed_files:, first_run: @first_run && !answers[:login].nil?,
+      sender: answers[:sender] || current_sender, changed_files:, first_run: credentials_never_committed?,
       deploy_written:, signup_mode: values["SIGNUP_MODE"], preset: fork_config["preset"],
       preset_in_deploy: values.key?("WORKSPACE_ON_SIGNUP"), rails_host: values["RAILS_HOST"],
       master_key_set: !@env["RAILS_MASTER_KEY"].to_s.strip.empty?,
@@ -570,9 +572,16 @@ class MailSetup
 
   def changed_files
     paths = [ ProductionCredentials::FILE, DEPLOY_FILE, ".gitignore" ]
-    out, = Open3.capture2(CleanGitEnv::HASH, "git", "-C", @root, "status", "--porcelain", "-uall", "--", *paths, err: File::NULL)
-    changed = out.lines.map { |line| line[3..].strip }
+    changed = git_status(paths).map { |line| line[3..].strip }
     paths.select { |path| changed.include?(path) }
+  end
+
+  # Read from git, not "did this run create it": Rails makes the key and file before the editor runs.
+  def credentials_never_committed? = git_status([ ProductionCredentials::FILE ]).any? { |line| line.start_with?("??") }
+
+  def git_status(paths)
+    out, = Open3.capture2(CleanGitEnv::HASH, "git", "-C", @root, "status", "--porcelain", "-uall", "--", *paths, err: File::NULL)
+    out.lines
   end
 
   def fork_config

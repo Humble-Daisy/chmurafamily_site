@@ -278,7 +278,11 @@ RSpec.describe MailSetup do
         FileUtils.mv(app.join("bin/rails"), app.join("bin/rails.real"))
         app.join("bin/rails").write(<<~SHIM)
           #!/usr/bin/env ruby
-          require "json"; File.write(#{log.to_s.inspect}, JSON.generate(argv: ARGV, env: ENV.to_h) + "\\n", mode: "a")
+          require "json"
+          secrets = #{[ login[:user_name], login[:password] ].inspect}
+          found = ENV.to_h.values.any? { |value| secrets.any? { |secret| value.include?(secret) } }
+          call = { argv: ARGV, visual: ENV["VISUAL"], redirected: ENV.key?("RAILS_CREDENTIALS_ENV"), secret_in_env: found }
+          File.write(#{log.to_s.inspect}, JSON.generate(call) + "\\n", mode: "a")
           exec(File.expand_path("rails.real", __dir__), *ARGV)
         SHIM
         app.join("bin/rails").chmod(0o755)
@@ -292,17 +296,37 @@ RSpec.describe MailSetup do
         credentials.login_matches?(**login)
         key = app.join("config/credentials/production.key").read.strip
 
-        edit = log.readlines.map { |line| JSON.parse(line) }.find { |call| call["argv"].first == "credentials:edit" }
+        calls = log.readlines.map { |line| JSON.parse(line) }
+        edit = calls.find { |call| call["argv"].first == "credentials:edit" }
 
         expect(leaks(log.read + app.join("config/deploy.yml").read, [ login[:user_name], login[:password], key ])).to be_empty
-        expect(edit["env"]["VISUAL"]).to include("--write-login")
-        expect(edit["env"].key?("RAILS_CREDENTIALS_ENV")).to be(false)
+        expect(calls.map { |call| call["secret_in_env"] }).to all(be(false))
+        expect(edit["visual"]).to include("--write-login")
+        expect(edit["redirected"]).to be(false)
       end
 
       it "has a scanner that finds a planted secret" do
         log.write("planted-sentinel")
 
         expect(leaks(log.read, [ "planted-sentinel" ])).to eq([ "planted-sentinel" ])
+      end
+
+      it "has a shim that notices a login in the environment" do
+        ENV["PLANTED_LOGIN"] = login[:password]
+        credentials.write_login(**login)
+
+        expect(log.readlines.map { |line| JSON.parse(line)["secret_in_env"] }).to all(be(true))
+      ensure
+        ENV.delete("PLANTED_LOGIN")
+      end
+
+      it "doesn't record the parent's environment" do
+        ENV["PARENT_VALUE"] = "must-stay-out-of-the-log"
+        credentials.write_login(**login)
+
+        expect(log.read.include?("must-stay-out-of-the-log")).to be(false)
+      ensure
+        ENV.delete("PARENT_VALUE")
       end
     end
   end
@@ -542,6 +566,10 @@ RSpec.describe MailSetup do
 
       it "reads a yes" do
         expect(prompts("y\n").confirm("Sure?", default: false)).to be(true)
+      end
+
+      it "asks again after invalid bytes" do
+        expect(prompts("\xFF y\n", "y\n").confirm("Sure?", default: false)).to be(true)
       end
     end
 
@@ -827,6 +855,14 @@ RSpec.describe MailSetup do
         expect(deploy.read).to eq(before)
         expect(output.string).to include("SMTP_ADDRESS=smtp.postmarkapp.com")
       end
+
+      it "doesn't say the login changed when it was kept and the edit failed" do
+        allow(credentials).to receive(:login?).and_return(true)
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "", "").run).to eq(1)
+        expect(output.string).not_to include("login has changed")
+      end
     end
 
     describe "swap warnings" do
@@ -881,16 +917,46 @@ RSpec.describe MailSetup do
 
     it "uses the app's name and preset from .fork.yml" do
       root.join(".fork.yml").write("name: my_app\npreset: shared\n")
+      root.join("config/credentials/production.yml.enc").write("x")
+      root.join("config/credentials/production.key").write("x")
       flow("1", "tok", "").run
 
       expect(output.string).to include('labelled "my_app"', "TENANCY_OWNER_EMAIL")
     end
 
-    it "skips the key backup when the login was kept" do
+    it "skips the key backup once the credentials file is committed" do
       allow(credentials).to receive(:login?).and_return(true)
       flow("1", "", "").run
 
       expect(output.string).not_to include("password manager")
+    end
+
+    context "with a credentials file that was never committed" do
+      before do
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+        root.join(".gitignore").write("config/credentials/*.key\n")
+        allow(credentials).to receive(:exists?).and_return(true)
+      end
+
+      it "still asks for the key backup, because an interrupted first run left the file" do
+        flow("1", "tok", "").run
+
+        expect(output.string).to include("password manager", "git add config/credentials/production.yml.enc")
+      end
+    end
+
+    it "doesn't claim nothing was written when stopped during the write" do
+      allow(credentials).to receive(:write_login).and_raise(Interrupt)
+
+      expect(flow("1", "tok", "").run).to eq(1)
+      expect(output.string).not_to include("Nothing was written")
+      expect(output.string).to include("Run bin/mail-setup again")
+    end
+
+    it "does say nothing was written when stopped while asking" do
+      expect(flow("1").run).to eq(1)
+      expect(output.string).to include("Nothing was written")
     end
 
     it "prints a fixed sentence for an unexpected error, without its message" do
