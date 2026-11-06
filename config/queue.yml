@@ -3,16 +3,9 @@ default: &default
     - polling_interval: 1
       batch_size: 500
   workers:
-    # Named queues (rather than the "*" wildcard) give clear operational signals
-    # when one backs up — e.g. "mailers queue is backed up" is a meaningful
-    # observability event. Note: with a single worker process + 3 threads, this
-    # does NOT relieve GVL contention; it's about visibility, not isolation.
-    #
-    # Queue conventions used by this template:
-    #   - default : business logic, sweeps, callbacks
-    #   - mailers : Action Mailer / mailer-class jobs (slow, network-bound)
-    #   - low     : best-effort cleanup, retention sweeps
-    - queues: [ default, mailers, low ]
+    # mailers first: a sign-in link is claimed ahead of backups and sweeps.
+    # Queue conventions: app/docs/developer/background-jobs.md.
+    - queues: [ mailers, default, low ]
       threads: 3
       processes: <%= ENV.fetch("JOB_CONCURRENCY", 1) %>
       polling_interval: 0.1

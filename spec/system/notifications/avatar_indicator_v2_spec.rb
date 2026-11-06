@@ -27,7 +27,7 @@ RSpec.describe "Avatar notification indicator v2", type: :system do
   describe "severity colors render correctly at each level" do
     it "renders a danger-colored pulsing dot for danger-severity unread" do
       deliver_danger
-      visit root_path
+      visit new_session_path
       dot = page.find('turbo-frame#notifications_indicator_avatar [data-severity]', visible: :all)
       expect(dot["data-severity"]).to eq("danger")
       expect(dot[:class]).to match(/bg-danger-strong/)
@@ -38,7 +38,7 @@ RSpec.describe "Avatar notification indicator v2", type: :system do
       # Wipe sign-in notifier first so warning is the highest severity present.
       user.notifications.destroy_all
       deliver_warning
-      visit root_path
+      visit new_session_path
       dot = page.find('turbo-frame#notifications_indicator_avatar [data-severity]', visible: :all)
       expect(dot["data-severity"]).to eq("warning")
       expect(dot[:class]).to match(/bg-warning(\s|"|$)/)
@@ -48,7 +48,7 @@ RSpec.describe "Avatar notification indicator v2", type: :system do
     it "renders an info-colored static dot for info-severity unread" do
       user.notifications.destroy_all
       deliver_info
-      visit root_path
+      visit new_session_path
       dot = page.find('turbo-frame#notifications_indicator_avatar [data-severity]', visible: :all)
       expect(dot["data-severity"]).to eq("info")
       expect(dot[:class]).to match(/bg-info(\s|"|$)/)
@@ -59,7 +59,7 @@ RSpec.describe "Avatar notification indicator v2", type: :system do
   describe "WCAG 2.2 AAA accessibility — both themes" do
     before do
       deliver_danger # ensure danger-severity dot is rendered for the audit
-      visit root_path
+      visit new_session_path
     end
 
     it "passes axe-core at AAA in light mode with the indicator rendered" do
@@ -78,7 +78,7 @@ RSpec.describe "Avatar notification indicator v2", type: :system do
   describe "regression guards (D1 partials must stay removed)" do
     it "does not render the standalone notifications bell link" do
       deliver_danger
-      visit root_path
+      visit new_session_path
       expect(page).to have_css("turbo-frame#notifications_indicator_avatar", visible: :all)
       expect(page).to have_no_css("#notifications-bell-link")
       expect(page).to have_no_css('turbo-frame#notifications_bell_label_frame')
