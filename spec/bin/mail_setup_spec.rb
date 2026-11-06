@@ -609,4 +609,275 @@ RSpec.describe MailSetup do
       expect(seen).to include("declined, echo is true")
     end
   end
+
+  describe "the flow" do
+    let(:root) { Pathname.new(Dir.mktmpdir) }
+    let(:output) { StringIO.new }
+    let(:env) { {} }
+    let(:deploy) { root.join("config/deploy.yml") }
+    let(:credentials) do
+      instance_double(MailSetup::ProductionCredentials, exists?: false, readable: :readable, login?: false, mailer_from: nil, write_login: true)
+    end
+
+    before do
+      FileUtils.mkdir_p(root.join("config/credentials"))
+      root.join("config/application.rb").write("module MyApp\nend\n")
+      FileUtils.cp(Rails.root.join("config/deploy.yml"), deploy)
+      git("init", "-q")
+      git("add", ".")
+      git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "x")
+      allow($stdin).to receive(:tty?).and_return(true)
+    end
+
+    after { FileUtils.rm_rf(root) }
+
+    def git(*args) = system(CleanGitEnv::HASH, "git", "-C", root.to_s, *args, exception: true)
+
+    def flow(*answers)
+      input = StringIO.new(answers.map { |answer| "#{answer}\n" }.join)
+      def input.noecho = yield(self)
+      described_class.new(root: root.to_s, prompts: MailSetup::Prompts.new(input:, output:), credentials:, env:, output:).tap do |setup|
+        allow(setup).to receive(:bundle_available?).and_return(true)
+      end
+    end
+
+    def clear = YAML.safe_load(deploy.read, aliases: true).dig("env", "clear")
+
+    describe "stopping before it asks anything" do
+      it "needs a terminal" do
+        allow($stdin).to receive(:tty?).and_return(false)
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("terminal")
+        expect(credentials).not_to have_received(:write_login)
+      end
+
+      it "needs the bundle" do
+        setup = flow
+        allow(setup).to receive(:bundle_available?).and_return(false)
+
+        expect(setup.run).to eq(1)
+        expect(output.string).to include("bin/setup")
+      end
+
+      it "needs a fork, and says to run bin/fork" do
+        root.join("config/application.rb").write("module ModelrailsBase\nend\n")
+        git("add", ".")
+        git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "y")
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("bin/fork")
+      end
+
+      it "proceeds on a renamed repo with no .fork.yml" do
+        expect(flow("1", "tok", "").run).to eq(0)
+      end
+
+      it "gives a wrong key its own sentence" do
+        allow(credentials).to receive_messages(exists?: true, readable: :wrong_key)
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("right key")
+        expect(output.string).not_to include("Choose")
+      end
+
+      it "gives invalid YAML its own sentence, naming the repair" do
+        allow(credentials).to receive_messages(exists?: true, readable: :invalid_yaml)
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("unset RAILS_MASTER_KEY", "bin/rails encrypted:edit config/credentials/production.yml.enc --key config/credentials/production.key")
+      end
+    end
+
+    describe "opening" do
+      it "says what's needed, and whether deploy.yml can be written, before asking" do
+        flow("1", "tok", "").run
+
+        expect(output.string.index("login")).to be < output.string.index("1) Postmark")
+        expect(output.string).to include("config/deploy.yml will be updated")
+      end
+
+      it "says when deploy.yml can't be written" do
+        deploy.delete
+        flow("1", "tok", "").run
+
+        expect(output.string).to include("set by hand")
+      end
+
+      it "changes nothing when the developer stops at the first question" do
+        before = deploy.read
+
+        expect(flow.run).to eq(1)
+        expect(deploy.read).to eq(before)
+        expect(credentials).not_to have_received(:write_login)
+      end
+    end
+
+    describe "providers" do
+      it "stores one Postmark token as both fields" do
+        flow("1", "tok", "").run
+
+        expect(credentials).to have_received(:write_login).with(user_name: "tok", password: "tok")
+        expect(clear).to include("SMTP_ADDRESS" => "smtp.postmarkapp.com", "SMTP_PORT" => 587)
+      end
+
+      it "builds the SES address from a region" do
+        flow("2", "us-east-1", "user", "pass", "hi@acme.example").run
+
+        expect(credentials).to have_received(:write_login).with(user_name: "user", password: "pass")
+        expect(clear).to include("SMTP_ADDRESS" => "email-smtp.us-east-1.amazonaws.com", "MAIL_FROM" => "hi@acme.example")
+      end
+
+      it "asks another server for its address and port, refusing 465" do
+        flow("3", "smtp.acme.example", "465", "2525", "user", "pass", "").run
+
+        expect(clear).to include("SMTP_ADDRESS" => "smtp.acme.example", "SMTP_PORT" => 2525)
+        expect(output.string).to include("STARTTLS")
+      end
+
+      it "refuses a pasted login as the sender" do
+        flow("2", "us-east-1", "user", "p@ss", "p@ss", "hi@acme.example").run
+
+        expect(clear["MAIL_FROM"]).to eq("hi@acme.example")
+      end
+    end
+
+    describe "when to ask for a login" do
+      it "requires one when the address changes, and writes nothing without it" do
+        allow(credentials).to receive_messages(exists?: true, login?: true)
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+        before = deploy.read
+
+        expect(flow("2", "us-east-1", "").run).to eq(1)
+        expect(deploy.read).to eq(before)
+        expect(credentials).not_to have_received(:write_login)
+      end
+
+      it "counts an address it can't read as changed" do
+        deploy.delete
+        allow(credentials).to receive(:login?).and_return(true)
+
+        expect(flow("1", "").run).to eq(1)
+        expect(credentials).not_to have_received(:write_login)
+      end
+
+      it "offers Replace login?, default No, when the address is unchanged and a login exists" do
+        allow(credentials).to receive(:login?).and_return(true)
+
+        expect(flow("1", "", "new@acme.example").run).to eq(0)
+        expect(output.string).to include("Replace login?")
+        expect(credentials).not_to have_received(:write_login)
+        expect(clear["MAIL_FROM"]).to eq("new@acme.example")
+      end
+
+      it "replaces the login on a yes" do
+        allow(credentials).to receive(:login?).and_return(true)
+
+        flow("1", "y", "new-token", "").run
+
+        expect(credentials).to have_received(:write_login).with(user_name: "new-token", password: "new-token")
+      end
+
+      it "asks when a field is missing, though the address is unchanged" do
+        allow(credentials).to receive(:login?).and_return(false)
+
+        flow("1", "tok", "").run
+
+        expect(output.string).not_to include("Replace login?")
+        expect(credentials).to have_received(:write_login)
+      end
+    end
+
+    it "asks before replacing root credentials, defaulting to No" do
+      root.join("config/credentials.yml.enc").write("x")
+
+      expect(flow("").run).to eq(1)
+      expect(output.string).to include("config/credentials.yml.enc")
+      expect(credentials).not_to have_received(:write_login)
+    end
+
+    it "leaves deploy.yml alone when the credentials write fails" do
+      allow(credentials).to receive(:write_login).and_return(false)
+      before = deploy.read
+
+      expect(flow("1", "tok", "").run).to eq(1)
+      expect(deploy.read).to eq(before)
+      expect(output.string).to include("deploy.yml wasn't touched")
+    end
+
+    describe "deploy.yml" do
+      it "still writes credentials when it can't be edited" do
+        deploy.write("service: x\n")
+
+        expect(flow("1", "tok", "").run).to eq(0)
+        expect(credentials).to have_received(:write_login)
+        expect(deploy.read).to eq("service: x\n")
+      end
+
+      it "keeps the file as it was, and exits 1, when its edit doesn't check out" do
+        before = deploy.read
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "tok", "").run).to eq(1)
+        expect(deploy.read).to eq(before)
+        expect(output.string).to include("SMTP_ADDRESS=smtp.postmarkapp.com")
+      end
+    end
+
+    describe "swap warnings" do
+      before do
+        allow(credentials).to receive(:login?).and_return(true)
+        deploy.write(deploy.read.sub("# MAIL_FROM: hello@app.yourdomain.com", "MAIL_FROM: old@acme.example"))
+      end
+
+      it "warns that the sender's domain must be verified at the new provider" do
+        flow("2", "us-east-1", "user", "pass", "").run
+
+        expect(output.string).to include("old@acme.example", "verified at the new provider")
+      end
+
+      it "warns about a sender from mailer.from too" do
+        deploy.write(deploy.read.sub("MAIL_FROM: old@acme.example", "# MAIL_FROM: x"))
+        allow(credentials).to receive(:mailer_from).and_return("cred@acme.example")
+        flow("2", "us-east-1", "user", "pass", "").run
+
+        expect(output.string).to include("cred@acme.example", "verified at the new provider")
+      end
+
+      it "warns about staging when staging has its own credentials" do
+        root.join("config/credentials/staging.yml.enc").write("x")
+        flow("2", "us-east-1", "user", "pass", "").run
+
+        expect(output.string).to include("staging", "old login")
+      end
+
+      it "doesn't warn about staging for deploy.staging.yml alone" do
+        root.join("config/deploy.staging.yml").write("x: 1\n")
+        flow("2", "us-east-1", "user", "pass", "").run
+
+        expect(output.string).not_to include("old login")
+      end
+    end
+
+    it "shows the current address and sender on a re-run, and never the login" do
+      allow(credentials).to receive(:login?).and_return(true)
+      flow("1", "y", "SENTINEL-LOGIN", "").run
+
+      expect(output.string).to include("smtp.postmarkapp.com")
+      expect(output.string).not_to include("SENTINEL-LOGIN")
+    end
+
+    it "prints a fixed sentence for an unexpected error, without its message" do
+      allow(credentials).to receive(:write_login).and_raise(StandardError, "FAKE-LOGIN in a message")
+
+      expect(flow("1", "tok", "").run).to eq(1)
+      expect(output.string).not_to include("FAKE-LOGIN")
+      expect(output.string).to include("stopped")
+    end
+  end
 end

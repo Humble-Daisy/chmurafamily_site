@@ -178,7 +178,7 @@ class MailSetup
     end
 
     def stored
-      @stored ||= show
+      @stored ||= exists? ? show : {}
     end
 
     def show
@@ -334,10 +334,168 @@ class MailSetup
       value unless value.match?(/[[:cntrl:]]/)
     end
   end
+
+  PROVIDERS = [ "Postmark", "Amazon SES", "Other SMTP server" ].freeze
+  DEPLOY_FILE = "config/deploy.yml"
+  STAGING_FILE = "config/credentials/staging.yml.enc"
+  TEMPLATE_MODULE = "ModelrailsBase"
+
+  def initialize(root:, prompts: Prompts.new, credentials: nil, env: ENV, output: $stdout)
+    @root = root
+    @prompts = prompts
+    @credentials = credentials
+    @env = env
+    @output = output
+  end
+
+  def run
+    check_can_run!
+    changes = KeyDecision.decide(root: @root, env: @env)
+    @credentials ||= ProductionCredentials.new(root: @root, env: changes)
+    check_readable!
+    confirm_replacing_root!
+    open
+    answers = ask
+    unless write_credentials(answers[:login])
+      say "The login couldn't be saved, so #{DEPLOY_FILE} wasn't touched. Run bin/rails credentials:edit --environment production to see why."
+      return 1
+    end
+    finish(answers)
+  rescue Stop => e
+    say e.message
+    1
+  rescue Declined, Interrupt
+    say "\nStopped. Nothing was written."
+    1
+  rescue StandardError
+    say "bin/mail-setup stopped on an unexpected error. The details stay hidden because they can contain a login."
+    1
+  end
+
+  private
+
+  def say(message) = @output.puts(message)
+  def path(relative) = File.join(@root, relative)
+
+  def check_can_run!
+    raise Stop, "bin/mail-setup asks for logins, so it needs a terminal. Nothing was written." unless $stdin.tty?
+    raise Stop, "This repo hasn't been forked yet. Run bin/fork first." unless renamed?
+    raise Stop, "The gems aren't installed. Run bin/setup first." unless bundle_available?
+  end
+
+  def renamed?
+    content, status = Open3.capture2(CleanGitEnv::HASH, "git", "-C", @root, "show", "HEAD:config/application.rb", err: File::NULL)
+    status.success? && !content.include?("module #{TEMPLATE_MODULE}")
+  end
+
+  def bundle_available? = system(CleanGitEnv::HASH, "bundle", "check", out: File::NULL, err: File::NULL, chdir: @root)
+
+  def check_readable!
+    case @credentials.readable
+    when :wrong_key
+      raise Stop, "#{KeyDecision::KEY_FILE} can't read #{ProductionCredentials::FILE}, and only the right key can. Rebuilding the file would lose secret_key_base and the encryption keys. #{KeyDecision::NEVER_REGENERATE}"
+    when :invalid_yaml
+      raise Stop, "#{ProductionCredentials::FILE} isn't valid YAML. Run `unset RAILS_MASTER_KEY`, then bin/rails encrypted:edit #{ProductionCredentials::FILE} --key #{KeyDecision::KEY_FILE}, fix it, and try again."
+    when :unknown
+      raise Stop, "#{ProductionCredentials::FILE} couldn't be read. Run bin/rails credentials:edit --environment production to see why."
+    end
+  end
+
+  def confirm_replacing_root!
+    return unless KeyDecision.replaces_root?(root: @root)
+
+    say "Production currently reads #{KeyDecision::ROOT_FILE}. This creates #{ProductionCredentials::FILE}, which replaces it."
+    raise Declined unless @prompts.confirm("Replace it?", default: false)
+  end
+
+  def open
+    say "This sets up outbound mail for production. You need your provider's login, and later a verified domain."
+    say(deploy_editable? ? "#{DEPLOY_FILE} will be updated." : "#{DEPLOY_FILE} can't be updated here, so its values will be printed to set by hand.")
+    say "Currently: #{current_address}, sending as #{current_sender || "the default"}." if current_address
+  end
+
+  def ask
+    provider = @prompts.choice("Which mail provider?", PROVIDERS)
+    server = server_for(provider)
+    login = login_for(provider, server[:address])
+    sender = @prompts.sender(current: current_sender, logins: login.to_h.values)
+    { provider:, login:, sender:, **server }
+  end
+
+  def server_for(provider)
+    case provider
+    when "Postmark" then { address: "smtp.postmarkapp.com", port: "587" }
+    when "Amazon SES" then { address: "email-smtp.#{@prompts.region}.amazonaws.com", port: "587" }
+    else { address: @prompts.address(logins: []), port: @prompts.port }
+    end
+  end
+
+  def login_for(provider, address)
+    return ask_login(provider) unless address == current_address && @credentials.login?
+
+    ask_login(provider) if @prompts.confirm("Replace login?", default: false)
+  end
+
+  def ask_login(provider)
+    if provider == "Postmark"
+      token = @prompts.secret("Server API token for this app's own Postmark server") or raise Declined
+      return { user_name: token, password: token }
+    end
+
+    user_name = @prompts.secret("SMTP username") or raise Declined
+    password = @prompts.secret("SMTP password") or raise Declined
+    { user_name:, password: }
+  end
+
+  def write_credentials(login) = login.nil? || @credentials.write_login(**login)
+
+  def finish(answers)
+    values = { "SMTP_ADDRESS" => answers[:address], "SMTP_PORT" => answers[:port] }
+    values["MAIL_FROM"] = answers[:sender] if answers[:sender]
+    warnings = swap_warnings(answers)
+    outcome = write_deploy(values)
+    if outcome == :failed
+      say "The edit to #{DEPLOY_FILE} didn't check out, so it's as it was. The login has changed, so set these by hand:"
+      values.each { |key, value| say "  #{key}=#{value}" }
+      return 1
+    end
+    warnings.each { |warning| say warning }
+    0
+  end
+
+  def swap_warnings(answers)
+    return [] if answers[:address] == current_address
+
+    sender = answers[:sender] || current_sender
+    warnings = []
+    warnings << "#{sender}'s domain must be verified at the new provider." if sender
+    if File.exist?(path(STAGING_FILE))
+      warnings << "Staging will move to this address too, but keeps its old login in #{STAGING_FILE}. " \
+        "Verify DNS, change staging's login (/docs/developer/deployment, staging notes), commit, prove it on staging, then deploy production."
+    end
+    warnings
+  end
+
+  def write_deploy(values)
+    before = deploy_text
+    return :not_editable unless deploy_editable?
+
+    after = DeployFile.with_values(before, values)
+    return :failed unless DeployFile.safe_edit?(before, after, values)
+
+    File.write(path(DEPLOY_FILE), after)
+    @deploy_text = after
+    :written
+  end
+
+  def deploy_text = @deploy_text ||= File.exist?(path(DEPLOY_FILE)) ? File.read(path(DEPLOY_FILE)) : ""
+  def deploy_editable? = DeployFile.editable?(deploy_text)
+  def current_address = @current_address ||= DeployFile.values(deploy_text)["SMTP_ADDRESS"]
+  def current_sender = DeployFile.values(deploy_text)["MAIL_FROM"] || @credentials.mailer_from
 end
 
 if $PROGRAM_NAME == __FILE__
   exit MailSetup::StandIn.run(ARGV.last) if ARGV.first == "--write-login"
 
-  abort("bin/mail-setup: not finished")
+  exit MailSetup.new(root: File.expand_path("..", __dir__)).run
 end
