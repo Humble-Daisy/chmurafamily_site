@@ -4,6 +4,43 @@ All notable changes to ModelRails are documented here, organized by phase.
 
 ## [Unreleased]
 
+## v2026.11.06
+
+### Fixed
+
+- Screen readers hear "Status:" before an operations status badge; its label sat in an `aria-label` that a plain span ignores.
+- The cookie preferences panel is announced as a group named for what it manages.
+- The deployment guide's fnox lines for `.kamal/secrets` keep the environment first and the key file last, as the secrets spec requires; the bare `fnox get` line it showed failed three of that spec's examples.
+- The deployment guide pins fnox and age in the form the workflow-audit invariant reads, and names the `install_args` line that invariant also checks.
+- The deployment guide's `fnox reencrypt` commands pass `--force`, and its restore starts the deployed version, not the checkout's.
+- The deployment guide shows how to keep a private deploy host's name out of a public repository.
+- The workspace overview has a heading naming the workspace, and the contact page has one main heading instead of two.
+- Sign-in links and other `deliver_later` mail run on the `mailers` queue, which the worker claims ahead of backups and sweeps.
+- The timezone pickers in appearance and notification settings show one label instead of two.
+
+### Changed
+
+- The deployment guide walks a fork to its first deploy in six checked steps, from preparing the server to deploying from CI, and covers team deploys with fnox, switching to a hosted registry, private-network SSH, and hardware you run yourself.
+- `bin/fork` lists `bin/mail-setup` in its next steps, and offers to run it once `bin/setup` succeeds.
+- The deployment guide leads with `bin/mail-setup` and adds a recipe for separating kinds of mail.
+- The docs say an invite-only app sends nothing to an address with no account, and how to create the first account in production.
+- `config/deploy.yml` gains commented `SIGNUP_MODE`, `WORKSPACE_ON_SIGNUP` and `TENANCY_SHARED_WORKSPACE_SLUG` lines.
+- The boot check's mail refusal gives a staging command that works.
+- nokogiri 1.19.7, loofah 2.25.3 and rails-html-sanitizer 1.7.2 close eleven advisories bundler-audit reported on 2026-11-03, among them mutation XSS and sanitizer bypasses, so bundler-audit passes again.
+- The forking guide says to turn on Dependabot alerts and security updates in a new fork, and how to clear a red bundler-audit between syncs.
+- `bin/setup` installs the Lefthook git hooks, so a new clone checks its commits and pushes without a separate `lefthook install`.
+- `bin/sync` points `gh` at the fork, as `bin/setup` does, so in a clone set up before setup did that, `gh pr create` stops opening PRs against the template.
+- Template specs no longer open a fork's public pages, and a check keeps it that way. `spec/system/pages/**` and `spec/requests/pages_spec.rb` are fork-owned; `spec/system/static_pages_spec.rb` is split between that folder and `spec/system/app_chrome_spec.rb`.
+
+### Added
+
+- `bin/mail-setup` configures a fork's production mail: the provider's address in `config/deploy.yml` and its login in the production credentials. It can be run again to swap providers or replace a login.
+- The database and uploaded files are backed up once a day (`BACKUP_SCHEDULE` changes it) to a folder or an S3-compatible bucket, with `bin/rails backup:now`, `backup:status` and `backup:restore`. With neither set, production boots and logs that backups are off: see the deployment guide's "Back up the database".
+
+### Security
+
+- Rails moves to a main commit from 2026-11-04 that carries the fixes released in Rails 8.1.4.1, among them a Strong Parameters bypass and XSS in the `highlight` helper and the MessagePack serializer.
+
 ## v2026.11.01
 
 ### Security
