@@ -376,11 +376,11 @@ class ForkFlow
     end
     # gh otherwise prefers the remote named upstream: the template.
     sh("git", "-C", @root, "config", "remote.origin.gh-resolved", "base") if origin_present || @opts[:origin]
-    @todos << "Once main is on GitHub, protect the branches: bin/branch-rules " \
+    @todos << "Once your branch is on GitHub, protect the branches: bin/branch-rules " \
               "(add --solo if you merge your own PRs; /docs/developer/forking)"
 
     @todos << "Record the cut point, in your TEMPLATE checkout:\n" \
-              "     git tag forks/#{snake}-baseline main && git push origin forks/#{snake}-baseline"
+              "     git tag forks/#{snake}-baseline #{@baseline_sha} && git push origin forks/#{snake}-baseline"
   end
 
   def upstream_taken?

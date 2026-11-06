@@ -372,6 +372,19 @@ RSpec.describe ForkFlow do
       expect(config["template_baseline"]).to match(/\A[0-9a-f]{40}\z/)
     end
 
+    it "tags the commit it forked from, because the template's main may be behind it" do
+      baseline = capture_git("rev-parse", "HEAD")
+      flow = run_fork(name: "my_app", preset: "none", yes: true)
+
+      expect(flow.instance_variable_get(:@todos).join).to include("git tag forks/my_app-baseline #{baseline} ")
+    end
+
+    it "doesn't assume main is the branch that reaches GitHub" do
+      flow = run_fork(name: "my_app", preset: "none", yes: true)
+
+      expect(flow.instance_variable_get(:@todos).join).not_to include("Once main is on GitHub")
+    end
+
     it "starts the fork's changelog clean, in the rename commit: the template's releases aren't the fork's" do
       run_fork(name: "my_app", yes: true)
 
