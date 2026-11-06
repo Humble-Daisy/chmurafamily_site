@@ -895,6 +895,27 @@ RSpec.describe ForkFlow do
         flow.offer_setup!
       end
 
+      it "reports success when bin/setup ran and passed" do
+        allow($stdin).to receive(:gets).and_return("y\n")
+        allow(flow).to receive(:system).and_return(true)
+
+        expect(flow.offer_setup!).to be(true)
+      end
+
+      it "reports no success when declined" do
+        allow($stdin).to receive(:gets).and_return("n\n")
+
+        expect(flow.offer_setup!).to be(false)
+      end
+
+      it "reports no success when bin/setup fails" do
+        allow($stdin).to receive(:gets).and_return("y\n")
+        allow(flow).to receive(:system).and_return(false)
+        allow(flow).to receive(:say)
+
+        expect(flow.offer_setup!).to be(false)
+      end
+
       # The fork is committed before setup is even offered, so a setup failure
       # must not send anyone back to re-run bin/fork.
       it "reports that the fork itself is already committed when setup fails" do
@@ -909,6 +930,110 @@ RSpec.describe ForkFlow do
         expect(messages.join("\n")).to match(/already committed/i)
         expect(messages.join("\n")).to match(/re-run bin\/setup/i)
       end
+    end
+  end
+
+  describe "#offer_mail_setup!" do
+    def flow_with_messages(opts = { name: "my_app" })
+      flow = described_class.new(opts, root: repo.to_s)
+      allow(flow).to receive(:puts)
+      messages = []
+      allow(flow).to receive(:say) { |message| messages << message }
+      allow(flow).to receive(:print)
+      [ flow, messages ]
+    end
+
+    [ { yes: true }, { dry_run: true } ].each do |opts|
+      it "doesn't ask under #{opts.keys.first}" do
+        flow, = flow_with_messages({ name: "my_app", **opts })
+        allow($stdin).to receive(:tty?).and_return(true)
+        expect($stdin).not_to receive(:gets)
+        expect(flow).not_to receive(:system)
+
+        flow.offer_mail_setup!
+      end
+    end
+
+    it "doesn't ask when stdin is not a terminal" do
+      flow, = flow_with_messages
+      allow($stdin).to receive(:tty?).and_return(false)
+      expect($stdin).not_to receive(:gets)
+      expect(flow).not_to receive(:system)
+
+      flow.offer_mail_setup!
+    end
+
+    context "when interactive" do
+      before { allow($stdin).to receive(:tty?).and_return(true) }
+
+      it "treats a bare Enter as No, warns, and changes nothing" do
+        flow, messages = flow_with_messages
+        allow($stdin).to receive(:gets).and_return("\n")
+        expect(flow).not_to receive(:system)
+
+        flow.offer_mail_setup!
+
+        expect(messages.join).to include("production will refuse to boot", "bin/mail-setup", "development mail keeps working")
+        expect(capture_git("status", "--porcelain")).to eq("")
+      end
+
+      it "runs bin/mail-setup on a yes, without a warning when it succeeds" do
+        flow, messages = flow_with_messages
+        allow($stdin).to receive(:gets).and_return("y\n")
+        expect(flow).to receive(:system)
+          .with(hash_including("GIT_DIR" => nil), "bin/mail-setup", hash_including(chdir: repo.to_s))
+          .and_return(true)
+
+        flow.offer_mail_setup!
+
+        expect(messages.join).not_to include("production will refuse to boot")
+      end
+
+      it "warns when bin/mail-setup is declined or fails" do
+        flow, messages = flow_with_messages
+        allow($stdin).to receive(:gets).and_return("y\n")
+        allow(flow).to receive(:system).and_return(false)
+
+        flow.offer_mail_setup!
+
+        expect(messages.join).to include("production will refuse to boot")
+      end
+    end
+  end
+
+  describe "the mail step in a fresh fork" do
+    it "lists bin/mail-setup in Next steps, even with --yes" do
+      flow = described_class.new({ name: "my_app", yes: true }, root: repo.to_s)
+      lines = []
+      allow(flow).to receive(:puts) { |line| lines << line }
+      silence_stdio { flow.run }
+
+      expect(lines.join("\n")).to match(/Next steps.*bin\/mail-setup/m)
+    end
+
+    it "lists bin/mail-setup under --dry-run" do
+      flow = described_class.new({ name: "my_app", yes: true, dry_run: true }, root: repo.to_s)
+      lines = []
+      allow(flow).to receive(:puts) { |line| lines << line }
+      silence_stdio { flow.run }
+
+      expect(lines.join("\n")).to match(/Next steps.*bin\/mail-setup/m)
+    end
+
+    it "doesn't offer mail when bin/setup didn't succeed" do
+      flow = described_class.new({ name: "my_app", yes: true }, root: repo.to_s)
+      allow(flow).to receive(:puts)
+      allow(flow).to receive(:offer_setup!).and_return(false)
+      expect(flow).not_to receive(:offer_mail_setup!)
+      silence_stdio { flow.run }
+    end
+
+    it "offers mail once bin/setup succeeded" do
+      flow = described_class.new({ name: "my_app", yes: true }, root: repo.to_s)
+      allow(flow).to receive(:puts)
+      allow(flow).to receive(:offer_setup!).and_return(true)
+      expect(flow).to receive(:offer_mail_setup!)
+      silence_stdio { flow.run }
     end
   end
 
