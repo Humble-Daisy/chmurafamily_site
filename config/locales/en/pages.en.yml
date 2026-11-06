@@ -113,7 +113,7 @@ en:
         email:
           title: "Email"
           description: "For general inquiries and support, write to %{address}."
-          address: "support@chmura_family.example"
+          address: "support@chmura_family.com"
         bugs:
           title: "Bug reports"
           description: "Found a bug? Report it on GitHub."
