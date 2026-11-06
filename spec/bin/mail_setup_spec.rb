@@ -1,5 +1,8 @@
 require "rails_helper"
+require "io/console"
+require "io/wait"
 require "open3"
+require "pty"
 require "tmpdir"
 
 load Rails.root.join("bin/mail-setup")
@@ -416,6 +419,194 @@ RSpec.describe MailSetup do
       enc_file.delete
 
       expect { described_class.decide(root: root.to_s, env: {}) }.to raise_error(MailSetup::Stop, /git history/)
+    end
+  end
+
+  describe MailSetup::Prompts do
+    let(:output) { StringIO.new }
+
+    def prompts(*answers)
+      input = StringIO.new(answers.join)
+      def input.noecho = yield(self)
+      described_class.new(input:, output:)
+    end
+
+    describe "#secret" do
+      it "says typing is hidden" do
+        prompts("tok\n").secret("Server API token")
+
+        expect(output.string).to include("Server API token", "typing is hidden")
+      end
+
+      it "strips what a paste brings along" do
+        expect(prompts("  tok-123 \n").secret("Token")).to eq("tok-123")
+      end
+
+      it "treats a bare Enter as declining" do
+        expect(prompts("\n").secret("Token")).to be_nil
+      end
+
+      it "treats the end of input as declining" do
+        expect(prompts.secret("Token")).to be_nil
+      end
+
+      it "asks again after whitespace alone" do
+        expect(prompts("   \n", "tok\n").secret("Token")).to eq("tok")
+      end
+
+      it "asks again after a space in the middle" do
+        expect(prompts("tok tok\n", "tok\n").secret("Token")).to eq("tok")
+      end
+
+      it "asks again after a control character" do
+        expect(prompts("to\ak\n", "tok\n").secret("Token")).to eq("tok")
+      end
+
+      it "asks again after invalid bytes, without raising or repeating them" do
+        expect(prompts("FAKE\xFF\n", "tok\n").secret("Token")).to eq("tok")
+        expect(output.string).not_to include("FAKE")
+      end
+
+      it "raises Declined on Ctrl-C" do
+        input = StringIO.new
+        def input.noecho = raise(Interrupt)
+
+        expect { described_class.new(input:, output:).secret("Token") }.to raise_error(MailSetup::Declined)
+      end
+    end
+
+    describe "#sender" do
+      it "refuses a value without an @" do
+        expect(prompts("nope\n", "hi@acme.example\n").sender(current: nil, logins: [])).to eq("hi@acme.example")
+      end
+
+      it "accepts a display name" do
+        expect(prompts("Acme <hi@acme.example>\n").sender(current: nil, logins: [])).to eq("Acme <hi@acme.example>")
+      end
+
+      it "returns nil for a blank answer, keeping the line" do
+        expect(prompts("\n").sender(current: "old@acme.example", logins: [])).to be_nil
+        expect(output.string).to include("old@acme.example")
+      end
+
+      it "refuses a pasted login without repeating it" do
+        expect(prompts("FAKE@TOKEN\n", "hi@acme.example\n").sender(current: nil, logins: [ "FAKE@TOKEN" ])).to eq("hi@acme.example")
+        expect(output.string).not_to include("FAKE@TOKEN")
+      end
+    end
+
+    describe "#address" do
+      it "refuses something that isn't a hostname" do
+        expect(prompts("bad host\n", "smtp.acme.example\n").address(logins: [])).to eq("smtp.acme.example")
+      end
+
+      it "refuses a pasted login without repeating it" do
+        expect(prompts("fake.token\n", "smtp.acme.example\n").address(logins: [ "fake.token" ])).to eq("smtp.acme.example")
+        expect(output.string).not_to include("fake.token")
+      end
+    end
+
+    describe "#port" do
+      it "refuses something that isn't a port" do
+        expect(prompts("abc\n", "99999\n", "2525\n").port).to eq("2525")
+      end
+
+      it "refuses 465 and says why" do
+        expect(prompts("465\n", "587\n").port).to eq("587")
+        expect(output.string).to include("STARTTLS")
+      end
+
+      it "defaults to 587" do
+        expect(prompts("\n").port).to eq("587")
+      end
+    end
+
+    describe "#region" do
+      it "refuses something that isn't an AWS region" do
+        expect(prompts("nope\n", "us-east-1\n").region).to eq("us-east-1")
+      end
+    end
+
+    describe "#choice" do
+      it "numbers the options and asks until one is picked" do
+        expect(prompts("9\n", "2\n").choice("Provider", %w[A B])).to eq("B")
+        expect(output.string).to include("1) A", "2) B")
+      end
+    end
+
+    describe "#confirm" do
+      it "takes the default on a bare Enter" do
+        expect(prompts("\n").confirm("Sure?", default: false)).to be(false)
+        expect(prompts("\n").confirm("Sure?", default: true)).to be(true)
+      end
+
+      it "reads a yes" do
+        expect(prompts("y\n").confirm("Sure?", default: false)).to be(true)
+      end
+    end
+
+    it "raises Declined at the end of input on an echoed prompt" do
+      expect { prompts.choice("Provider", %w[A B]) }.to raise_error(MailSetup::Declined)
+    end
+  end
+
+  describe "hidden prompts in a real terminal" do
+    def script = Rails.root.join("bin/mail-setup").to_s
+
+    # Writes only once the prompt is up and echo is off, or after the wait runs out.
+    def drive(code, prompts, echo_off_wait: 10)
+      seen = +""
+      PTY.spawn(RbConfig.ruby, "-e", code) do |reader, writer, pid|
+        prompts.each_with_index do |prompt, index|
+          deadline = Time.now + 15
+          until seen.include?(prompt)
+            raise "no prompt #{prompt.inspect}" if Time.now > deadline
+
+            seen << reader.read_nonblock(4096, exception: false).to_s if reader.wait_readable(0.1)
+          end
+          wait_until = Time.now + echo_off_wait
+          sleep(0.005) while reader.echo? && Time.now < wait_until
+          yield(writer, index)
+        end
+        begin
+          loop { seen << reader.readpartial(4096) }
+        rescue Errno::EIO, EOFError
+          nil
+        end
+        Process.wait(pid)
+      end
+      seen
+    end
+
+    it "doesn't echo what's typed, at either of two prompts" do
+      code = %(load #{script.inspect}; p = MailSetup::Prompts.new; p.secret("First"); p.secret("Second"))
+      seen = drive(code, %w[First Second]) { |writer, index| writer.puts("TYPED#{index}") }
+
+      expect(seen).to include("First", "Second")
+      expect(seen).not_to include("TYPED0")
+      expect(seen).not_to include("TYPED1")
+    end
+
+    it "has a driver that catches a second prompt that echoes" do
+      code = %(require "io/console"; print "First "; $stdin.noecho(&:gets); print "Second "; $stdin.gets)
+      seen = drive(code, %w[First Second], echo_off_wait: 1) { |writer, index| writer.puts("TYPED#{index}") }
+
+      expect(seen).not_to include("TYPED0")
+      expect(seen).to include("TYPED1")
+    end
+
+    it "restores echo after Ctrl-C at a hidden prompt" do
+      code = <<~RUBY_CODE
+        load #{script.inspect}
+        begin
+          MailSetup::Prompts.new.secret("First")
+        rescue MailSetup::Declined
+          puts "declined, echo is #{'#'}{$stdin.echo?}"
+        end
+      RUBY_CODE
+      seen = drive(code, %w[First]) { |writer, _index| writer.write("\x03") }
+
+      expect(seen).to include("declined, echo is true")
     end
   end
 end

@@ -3,6 +3,7 @@
 
 # bin/mail-setup: configures this fork's production mail. See /docs/developer/deployment.
 
+require "io/console"
 require "json"
 require "open3"
 require "rbconfig"
@@ -13,6 +14,7 @@ require_relative "../lib/clean_git_env"
 class MailSetup
   # Its message is always a fixed sentence, safe to print.
   class Stop < StandardError; end
+  class Declined < StandardError; end
 
   module CredentialsText
     def self.with_login(text, user_name:, password:)
@@ -233,6 +235,104 @@ class MailSetup
       !out.strip.empty?
     end
     private_class_method :committed?
+  end
+
+  class Prompts
+    HOSTNAME = /\A[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+\z/i
+    REGION = /\A[a-z]{2}(-[a-z]+)+-\d+\z/
+    NOT_THAT = "That looks like the login, so it wasn't used. Please try again."
+
+    def initialize(input: $stdin, output: $stdout)
+      @input = input
+      @output = output
+    end
+
+    def secret(label)
+      loop do
+        @output.print "#{label} (typing is hidden; Enter alone stops here): "
+        line = read { @input.noecho(&:gets) }
+        @output.puts
+        return nil if line.nil? || line.chomp.empty?
+
+        value = valid_text(line)
+        return value if value && !value.empty? && !value.match?(/\s/)
+
+        @output.puts "That can't be right: it's blank, has spaces in it, or has characters a login can't have. Please try again."
+      end
+    end
+
+    def sender(current:, logins:)
+      kept = current ? "blank keeps #{current}" : "blank uses noreply@ your RAILS_HOST"
+      ask_until("Sending address (#{kept}): ", logins, blank: true) do |value|
+        value.include?("@") || "A sending address needs an @. Please try again."
+      end
+    end
+
+    def address(logins:)
+      ask_until("SMTP server's address: ", logins) do |value|
+        value.match?(HOSTNAME) || "That doesn't look like a hostname. Please try again."
+      end
+    end
+
+    def port
+      answer = ask_until("SMTP port (blank uses 587): ", [], blank: true) do |value|
+        next "Port 465 won't work: this app uses STARTTLS, so it would start fine and then fail at send. Try 587." if value == "465"
+
+        value.match?(/\A\d+\z/) && value.to_i.between?(1, 65_535) || "That isn't a port number. Please try again."
+      end
+      answer || "587"
+    end
+
+    def region
+      ask_until("AWS region, such as us-east-1: ", []) do |value|
+        value.match?(REGION) || "That doesn't look like an AWS region. Please try again."
+      end
+    end
+
+    def choice(label, options)
+      @output.puts label
+      options.each_with_index { |option, index| @output.puts "  #{index + 1}) #{option}" }
+      ask_until("Choose 1-#{options.size}: ", []) do |value|
+        value.match?(/\A\d+\z/) && value.to_i.between?(1, options.size) || "Please choose a number from the list."
+      end.then { |value| options[value.to_i - 1] }
+    end
+
+    def confirm(label, default:)
+      @output.print "#{label} [#{default ? "Y/n" : "y/N"}]: "
+      answer = read_echoed.strip
+      answer.empty? ? default : answer.match?(/\Ay/i)
+    end
+
+    private
+
+    def ask_until(prompt, logins, blank: false)
+      loop do
+        @output.print prompt
+        value = valid_text(read_echoed)
+        return nil if value&.empty? && blank
+
+        verdict = value && !value.empty? && (logins.include?(value) ? NOT_THAT : yield(value))
+        return value if verdict == true
+
+        @output.puts verdict || "That can't be right. Please try again."
+      end
+    end
+
+    def read_echoed = read { @input.gets } || raise(Declined)
+
+    def read
+      yield
+    rescue Interrupt
+      raise Declined
+    end
+
+    # Encoding comes first: strip and regexes raise on invalid bytes, and the error carries the value.
+    def valid_text(line)
+      return nil unless line.valid_encoding?
+
+      value = line.strip
+      value unless value.match?(/[[:cntrl:]]/)
+    end
   end
 end
 
