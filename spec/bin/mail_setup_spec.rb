@@ -235,22 +235,22 @@ RSpec.describe MailSetup do
 
     it "tells a wrong key from invalid YAML" do
       credentials.write_login(**login)
-      expect(described_class.new(root: app.to_s).readable).to eq(:readable)
+      expect(described_class.new(root: app.to_s).readability).to eq(:readable)
 
       key = app.join("config/credentials/production.key")
       good = key.read
       key.write("0" * 32)
-      expect(described_class.new(root: app.to_s).readable).to eq(:wrong_key)
+      expect(described_class.new(root: app.to_s).readability).to eq(:wrong_key)
 
       key.write(good)
       raw_write("smtp: bad: yaml: here\n")
-      expect(described_class.new(root: app.to_s).readable).to eq(:invalid_yaml)
+      expect(described_class.new(root: app.to_s).readability).to eq(:invalid_yaml)
     end
 
     it "reads a file with an alias and a date, as the app does" do
       raw_write(%(base: &b\n  a: 1\ncopy: *b\nwhen: 2026-01-01\nmailer:\n  from: hi@acme.example\nsmtp:\n  user_name: "u"\n  password: "p"\n))
 
-      expect(credentials.readable).to eq(:readable)
+      expect(credentials.readability).to eq(:readable)
       expect(credentials.login_matches?(user_name: "u", password: "p")).to be(true)
       expect(credentials.mailer_from).to eq("hi@acme.example")
     end
@@ -521,12 +521,7 @@ RSpec.describe MailSetup do
 
     describe "#address" do
       it "refuses something that isn't a hostname" do
-        expect(prompts("bad host\n", "smtp.acme.example\n").address(logins: [])).to eq("smtp.acme.example")
-      end
-
-      it "refuses a pasted login without repeating it" do
-        expect(prompts("fake.token\n", "smtp.acme.example\n").address(logins: [ "fake.token" ])).to eq("smtp.acme.example")
-        expect(output.string).not_to include("fake.token")
+        expect(prompts("bad host\n", "smtp.acme.example\n").address).to eq("smtp.acme.example")
       end
     end
 
@@ -644,7 +639,7 @@ RSpec.describe MailSetup do
     let(:env) { {} }
     let(:deploy) { root.join("config/deploy.yml") }
     let(:credentials) do
-      instance_double(MailSetup::ProductionCredentials, exists?: false, readable: :readable, login?: false, mailer_from: nil, write_login: true)
+      instance_double(MailSetup::ProductionCredentials, readability: :readable, login?: false, mailer_from: nil, write_login: true)
     end
 
     before do
@@ -702,7 +697,7 @@ RSpec.describe MailSetup do
       end
 
       it "gives a wrong key its own sentence" do
-        allow(credentials).to receive_messages(exists?: true, readable: :wrong_key)
+        allow(credentials).to receive_messages(readability: :wrong_key)
         root.join("config/credentials/production.yml.enc").write("x")
         root.join("config/credentials/production.key").write("x")
 
@@ -712,7 +707,7 @@ RSpec.describe MailSetup do
       end
 
       it "gives invalid YAML its own sentence, naming the repair" do
-        allow(credentials).to receive_messages(exists?: true, readable: :invalid_yaml)
+        allow(credentials).to receive_messages(readability: :invalid_yaml)
         root.join("config/credentials/production.yml.enc").write("x")
         root.join("config/credentials/production.key").write("x")
 
@@ -776,7 +771,7 @@ RSpec.describe MailSetup do
 
     describe "when to ask for a login" do
       it "requires one when the address changes, and writes nothing without it" do
-        allow(credentials).to receive_messages(exists?: true, login?: true)
+        allow(credentials).to receive_messages(login?: true)
         root.join("config/credentials/production.yml.enc").write("x")
         root.join("config/credentials/production.key").write("x")
         before = deploy.read
@@ -861,7 +856,24 @@ RSpec.describe MailSetup do
         allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
 
         expect(flow("1", "", "").run).to eq(1)
-        expect(output.string).not_to include("login has changed")
+        expect(output.string).not_to include("new login is saved")
+      end
+
+      it "says a new login is saved when the edit fails after writing one" do
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "tok", "").run).to eq(1)
+        expect(output.string).to include("new login is saved")
+      end
+
+      it "still gives the key backup when the edit fails on a first run" do
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+        root.join(".gitignore").write("config/credentials/*.key\n")
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "tok", "").run).to eq(1)
+        expect(output.string).to include("password manager")
       end
     end
 
@@ -894,8 +906,8 @@ RSpec.describe MailSetup do
 
       it "doesn't warn about staging for deploy.staging.yml alone" do
         root.join("config/deploy.staging.yml").write("x: 1\n")
-        flow("2", "us-east-1", "user", "pass", "").run
 
+        expect(flow("2", "us-east-1", "user", "pass", "").run).to eq(0)
         expect(output.string).not_to include("old login")
       end
     end
@@ -926,8 +938,8 @@ RSpec.describe MailSetup do
 
     it "skips the key backup once the credentials file is committed" do
       allow(credentials).to receive(:login?).and_return(true)
-      flow("1", "", "").run
 
+      expect(flow("1", "", "").run).to eq(0)
       expect(output.string).not_to include("password manager")
     end
 
@@ -936,8 +948,7 @@ RSpec.describe MailSetup do
         root.join("config/credentials/production.yml.enc").write("x")
         root.join("config/credentials/production.key").write("x")
         root.join(".gitignore").write("config/credentials/*.key\n")
-        allow(credentials).to receive(:exists?).and_return(true)
-      end
+        end
 
       it "still asks for the key backup, because an interrupted first run left the file" do
         flow("1", "tok", "").run

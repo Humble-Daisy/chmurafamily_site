@@ -134,9 +134,7 @@ class MailSetup
       @env = env
     end
 
-    def exists? = File.exist?(File.join(@root, FILE))
-
-    def readable
+    def readability
       return :readable unless exists?
 
       stored
@@ -170,6 +168,8 @@ class MailSetup
     end
 
     private
+
+    def exists? = File.exist?(File.join(@root, FILE))
 
     def child_env = CleanGitEnv::HASH.merge("RAILS_CREDENTIALS_ENV" => nil).merge(@env)
 
@@ -268,8 +268,8 @@ class MailSetup
       end
     end
 
-    def address(logins:)
-      ask_until("SMTP server's address: ", logins) do |value|
+    def address
+      ask_until("SMTP server's address: ", []) do |value|
         value.match?(HOSTNAME) || "That doesn't look like a hostname. Please try again."
       end
     end
@@ -448,19 +448,17 @@ class MailSetup
     @credentials ||= ProductionCredentials.new(root: @root, env: changes)
     check_readable!
     confirm_replacing_root!
-    open
+    announce
     answers = ask
-    @writing = true
-    unless write_credentials(answers[:login])
-      say "The login couldn't be saved, so #{DEPLOY_FILE} wasn't touched. Run bin/rails credentials:edit --environment production to see why."
-      return 1
-    end
+    writing = true
+    write_credentials(answers[:login]) or
+      raise Stop, "The login couldn't be saved, so #{DEPLOY_FILE} wasn't touched. Run bin/rails credentials:edit --environment production to see why."
     finish(answers)
   rescue Stop => e
     say e.message
     1
   rescue Declined, Interrupt
-    say(@writing ? "\nStopped while saving. Run bin/mail-setup again to finish, then check git status." : "\nStopped. Nothing was written.")
+    say(writing ? "\nStopped while saving. Run bin/mail-setup again to finish, then check git status." : "\nStopped. Nothing was written.")
     1
   rescue StandardError
     say "bin/mail-setup stopped on an unexpected error. The details stay hidden because they can contain a login."
@@ -486,7 +484,7 @@ class MailSetup
   def bundle_available? = system(CleanGitEnv::HASH, "bundle", "check", out: File::NULL, err: File::NULL, chdir: @root)
 
   def check_readable!
-    case @credentials.readable
+    case @credentials.readability
     when :wrong_key
       raise Stop, "#{KeyDecision::KEY_FILE} can't read #{ProductionCredentials::FILE}, and only the right key can. Rebuilding the file would lose secret_key_base and the encryption keys. #{KeyDecision::NEVER_REGENERATE}"
     when :invalid_yaml
@@ -503,7 +501,7 @@ class MailSetup
     raise Declined unless @prompts.confirm("Replace it?", default: false)
   end
 
-  def open
+  def announce
     say "This sets up outbound mail for production. You need your provider's login, and later a verified domain."
     say(deploy_editable? ? "#{DEPLOY_FILE} will be updated." : "#{DEPLOY_FILE} can't be updated here, so its values will be printed to set by hand.")
     say "Currently: #{current_address}, sending as #{current_sender || "the default"}." if current_address
@@ -521,7 +519,7 @@ class MailSetup
     case provider
     when "Postmark" then { address: "smtp.postmarkapp.com", port: "587" }
     when "Amazon SES" then { address: "email-smtp.#{@prompts.region}.amazonaws.com", port: "587" }
-    else { address: @prompts.address(logins: []), port: @prompts.port }
+    else { address: @prompts.address, port: @prompts.port }
     end
   end
 
@@ -549,13 +547,9 @@ class MailSetup
     values["MAIL_FROM"] = answers[:sender] if answers[:sender]
     warnings = swap_warnings(answers)
     outcome = write_deploy(values)
-    if outcome == :failed
-      say "The edit to #{DEPLOY_FILE} didn't check out, so it's as it was. Set these by hand:"
-      values.each { |key, value| say "  #{key}=#{value}" }
-      return 1
-    end
+    say "The edit to #{DEPLOY_FILE} didn't check out, so it's as it was.#{" The new login is saved." if answers[:login]}" if outcome == :failed
     say closing_message(answers, deploy_written: outcome == :written, warnings:)
-    0
+    outcome == :failed ? 1 : 0
   end
 
   def closing_message(answers, deploy_written:, warnings:)
