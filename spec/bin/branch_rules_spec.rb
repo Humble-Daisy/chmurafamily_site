@@ -8,6 +8,7 @@ RSpec.describe BranchRules do
   let(:log) { workdir.join("gh.log") }
   let(:existing_rulesets) { [] }
   let(:next_exists) { false }
+  let(:main_exists) { true }
   let(:refuse) { nil }
 
   after { FileUtils.rm_rf(workdir) }
@@ -21,8 +22,8 @@ RSpec.describe BranchRules do
       case "$*" in *"--input -"*) echo "BODY $(cat)" >> "#{log}" ;; esac
       case "$*" in
         *"refs/heads/next"*"sha="*) echo '{}' ;;
-        *"git/ref/heads/next"*) #{next_exists ? "echo '{}'" : 'echo "Not Found (HTTP 404)" >&2; exit 1'} ;;
-        *"git/ref/heads/main"*) echo "abc123" ;;
+        *"git/ref/heads/next"*) #{next_exists ? 'echo "def456"' : 'echo "Not Found (HTTP 404)" >&2; exit 1'} ;;
+        *"git/ref/heads/main"*) #{main_exists ? 'echo "abc123"' : 'echo "Not Found (HTTP 404)" >&2; exit 1'} ;;
         *"-X POST repos/me/app/rulesets --input -"*) #{refuse ? "echo '#{refuse}' >&2; exit 1" : "echo '{}'"} ;;
         *"api repos/me/app/rulesets") cat "#{bin.join('rulesets.json')}" ;;
         *) echo '{}' ;;
@@ -102,6 +103,32 @@ RSpec.describe BranchRules do
     run_rules
 
     expect(writes).to include("CALL api -X POST repos/me/app/git/refs -f ref=refs/heads/next -f sha=abc123")
+  end
+
+  context "when a Fork-button fork has next and no main" do
+    let(:next_exists) { true }
+    let(:main_exists) { false }
+
+    it "creates main from next's head" do
+      run_rules
+
+      expect(writes).to include("CALL api -X POST repos/me/app/git/refs -f ref=refs/heads/main -f sha=def456")
+    end
+
+    it "writes nothing under --dry-run" do
+      run_rules(dry_run: true)
+
+      expect(writes).to be_empty
+    end
+  end
+
+  context "when the repository has neither branch" do
+    let(:main_exists) { false }
+
+    it "stops and says to push first" do
+      expect { run_rules }.to raise_error(SystemExit)
+      expect(writes).to be_empty
+    end
   end
 
   context "when next already exists" do

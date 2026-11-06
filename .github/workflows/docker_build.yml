@@ -44,4 +44,4 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: modelrails_base:ci-${{ github.sha }}
+          tags: chmura_family:ci-${{ github.sha }}

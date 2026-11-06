@@ -1,0 +1,9 @@
+#!/bin/sh
+# Files this branch changes, for Lefthook's filters: against main, else next on a fresh
+# Fork-button fork, else everything on a first push. A missing ref would fail the push.
+for base in origin/main origin/next; do
+  if git rev-parse --verify --quiet "$base" > /dev/null; then
+    exec git diff --name-only "$base...HEAD"
+  fi
+done
+exec git ls-files

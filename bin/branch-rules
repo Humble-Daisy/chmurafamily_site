@@ -24,6 +24,7 @@ class BranchRules
     say("== Branch rules for #{@repo}#{' (solo: no approval required)' if solo?} ==")
 
     existing = existing_rulesets
+    ensure_main_branch!
     ensure_integration_branch!
     set_default_branch!
     rulesets.each { |ruleset| apply!(ruleset, existing) }
@@ -58,6 +59,18 @@ class BranchRules
     abort("bin/branch-rules: could not read #{@repo}'s rulesets: #{out}") unless ok
 
     JSON.parse(out)
+  end
+
+  # The Fork button copies only the template's default branch, which is next.
+  def ensure_main_branch!
+    _, exists = gh("api", "repos/#{@repo}/git/ref/heads/main")
+    return say("  ✓ main exists") if exists
+
+    sha, ok = gh("api", "repos/#{@repo}/git/ref/heads/#{INTEGRATION}", "--jq", ".object.sha")
+    abort("bin/branch-rules: #{@repo} has neither main nor #{INTEGRATION}; push your branch first") unless ok
+
+    write("create main at #{INTEGRATION} (#{sha[0, 7]})",
+          "api", "-X", "POST", "repos/#{@repo}/git/refs", "-f", "ref=refs/heads/main", "-f", "sha=#{sha}")
   end
 
   def ensure_integration_branch!

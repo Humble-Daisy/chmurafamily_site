@@ -489,8 +489,8 @@ RSpec.describe "Template invariants" do
       expect(command["run"].to_s).to include("bin/docker-build-check"),
         "expected the pre-push docker_build command to run bin/docker-build-check so a local " \
         "push of a build-input change proves the image builds before CI does"
-      expect(command["files"].to_s).to include("origin/main"),
-        "expected `files:` to diff against origin/main — a rebase replay pushes no changed files, so a " \
+      expect(command["files"].to_s).to eq("bin/branch-changes"),
+        "expected `files:` to diff against the fork's base branch — a rebase replay pushes no changed files, so a " \
         "push-range filter would skip the image build on exactly the push that re-lands a build change"
       build_inputs.each do |input|
         expect(command["glob"].to_s).to include(input),
@@ -615,7 +615,7 @@ RSpec.describe "Template invariants" do
 
       expect(command["glob"].to_s).to include("hotcell/**")
       expect(command["run"].to_s).to include("docker build --pull hotcell")
-      expect(command["files"].to_s).to include("origin/main...HEAD"),
+      expect(command["files"].to_s).to eq("bin/branch-changes"),
         "diffed against main, like docker_build, so a rebase replay still builds the cell"
     end
 
@@ -1274,6 +1274,19 @@ RSpec.describe "Template invariants" do
 
     it "doesn't send .env.example readers to a removed route" do
       expect(File.read(root.join(".env.example"))).not_to include("/registrations/new")
+    end
+  end
+
+  describe "Lefthook's changed-file filters on a fork without main" do
+    let(:filters) do
+      commands = YAML.safe_load(File.read(root.join("lefthook.yml")), aliases: true).fetch("pre-push").fetch("commands")
+      commands.filter_map { |name, command| [ name, command["files"] ] if command["files"] }
+    end
+
+    # git exits 128 on a missing ref, which fails the whole push.
+    it "never names a branch a fork may not have" do
+      expect(filters.size).to be >= 3
+      expect(filters.reject { |_, files| files == "bin/branch-changes" }).to be_empty
     end
   end
 
