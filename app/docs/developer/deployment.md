@@ -317,6 +317,38 @@ To check a deployment: request a magic link for your own address and read the
 mail. If nothing arrives, `kamal app logs` shows the failed job with the
 provider's response.
 
+#### Separating kinds of mail later
+
+Transactional mail is all the template ships. When an app starts sending
+another kind, such as a broadcast, give that mailer its own settings. Nothing
+else changes, and a mailer that declares nothing stays on the settings above:
+
+```ruby
+class BroadcastMailer < ApplicationMailer
+  self.smtp_settings = MailDelivery.smtp_settings.merge(
+    address: ENV["BROADCAST_SMTP_ADDRESS"],
+    user_name: Rails.application.credentials.dig(:smtp_broadcast, :user_name),
+    password: Rails.application.credentials.dig(:smtp_broadcast, :password)
+  )
+  self.deliver_later_queue_name = :low
+end
+```
+
+Then add those settings, and publish that kind's DNS on its own subdomain.
+
+- **Blank settings:** `merge` overrides even with `nil`, so a mailer with blank
+  settings can't fall through to the transactional login. A mailer that leaves
+  this block out does send as transactional.
+- **The boot check:** it stays about sign-in. A broken broadcast setup doesn't
+  stop the app booting; it shows up as that mailer's failed jobs.
+- **The queue:** a subclass inherits `mailers`, the queue sign-in mail is claimed
+  from first, so a large send without its own queue would hold up sign-in links.
+- **A provider's streams:** if a provider selects a stream by header, add
+  `default "Header-Name": "value"` to the mailer, using the name from its docs.
+- **No usable SMTP:** set `self.delivery_method` in that mailer for production
+  only, and add the provider's gem. Set unconditionally, it overrides `:test` and
+  the development delivery method, so those environments could send real mail.
+
 ### 5. Point DNS, then deploy
 
 Point your domain at the server and wait until `dig +short app.yourdomain.com`
