@@ -1,7 +1,5 @@
 # Fork provenance — written by bin/fork. Do not gate on this file; live
 # state is derived from the repository. Committed so every clone inherits
-# the decisions: bin/setup reads `preset` into a teammate's .env, and
-# `template_baseline` answers "based on which template version?".
 ---
 name: chmura_family
 product_name: Chmura Family

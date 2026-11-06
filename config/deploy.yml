@@ -115,7 +115,6 @@ env:
     # supervisor — confirm puma-plugin-solid_queue's behavior before raising this.
     # WEB_CONCURRENCY: 2
 
-    # Match this to any external database server to configure Active Record correctly
     # Use chmura_family-db for a db accessory server on same machine via local kamal docker network.
     # DB_HOST: 192.168.0.2
 
