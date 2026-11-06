@@ -1,4 +1,5 @@
 require "rails_helper"
+require "open3"
 require "tmpdir"
 
 load Rails.root.join("bin/mail-setup")
@@ -151,6 +152,182 @@ RSpec.describe MailSetup do
       after = "service: b\nenv:\n  clear:\n    SMTP_ADDRESS: b\n"
 
       expect(described_class.safe_edit?(before, after, { "SMTP_ADDRESS" => "b" })).to be(false)
+    end
+  end
+
+  describe MailSetup::ProductionCredentials do
+    let(:app) { build_app_fixture }
+    let(:credentials) { described_class.new(root: app.to_s) }
+    let(:login) { { user_name: "fake-u", password: "abc #def" } }
+    let(:touched_env) { %w[BUNDLE_GEMFILE BOOTSNAP_CACHE_DIR RAILS_MASTER_KEY RAILS_CREDENTIALS_ENV VISUAL] }
+
+    around do |example|
+      kept = ENV.to_h.slice(*touched_env)
+      ENV["BUNDLE_GEMFILE"] = Rails.root.join("Gemfile").to_s
+      ENV["BOOTSNAP_CACHE_DIR"] = Rails.root.join("tmp/cache").to_s
+      ENV.delete("RAILS_MASTER_KEY")
+      ENV.delete("RAILS_CREDENTIALS_ENV")
+      example.run
+    ensure
+      touched_env.each { |key| ENV[key] = kept[key] }
+    end
+
+    after { FileUtils.rm_rf(app.dirname) }
+
+    def build_app_fixture(name: "app")
+      root = Pathname.new(Dir.mktmpdir).join(name)
+      FileUtils.mkdir_p(root.join("bin"))
+      raise "fixture must be outside the checkout" if root.realpath.to_s.start_with?("#{Rails.root.realpath}/")
+
+      %w[config lib].each { |dir| FileUtils.cp_r(Rails.root.join(dir), root) }
+      FileUtils.rm_rf(root.join("config/credentials"))
+      FileUtils.rm_f([ root.join("config/master.key"), root.join("config/credentials.yml.enc") ])
+      %w[bin/rails bin/mail-setup .gitattributes .gitignore].each { |file| FileUtils.cp(Rails.root.join(file), root.join(file)) }
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "init", "-q", exception: true)
+      root
+    end
+
+    def raw_write(text)
+      env = CleanGitEnv::HASH.merge("VISUAL" => %(#{RbConfig.ruby} -e "File.write(ARGV[0], ENV.fetch('CONTENT'))"), "CONTENT" => text)
+      system(env, "bin/rails", "credentials:edit", "--environment", "production", chdir: app.to_s, out: File::NULL, err: File::NULL)
+    end
+
+    def show
+      IO.popen(CleanGitEnv::HASH, %w[bin/rails credentials:show --environment production], chdir: app.to_s, err: File::NULL, &:read)
+    end
+
+    it "creates credentials on a first run without printing anything" do
+      expect { expect(credentials.write_login(**login)).to be(true) }.not_to output.to_stdout_from_any_process
+
+      expect(app.join("config/credentials/production.key")).to exist
+      expect(app.join("config/credentials/production.yml.enc")).to exist
+      expect(credentials.login_matches?(**login)).to be(true)
+      expect(show).to include("secret_key_base")
+    end
+
+    it "works from a checkout path with a space" do
+      spaced = build_app_fixture(name: "my app")
+
+      expect(described_class.new(root: spaced.to_s).write_login(**login)).to be(true)
+    ensure
+      FileUtils.rm_rf(spaced.dirname)
+    end
+
+    it "reports a failed re-run, though Rails exits 0, and keeps the old login" do
+      credentials.write_login(**login)
+      failing = described_class.new(root: app.to_s)
+      allow(failing).to receive(:stand_in_command).and_return("false")
+
+      expect(failing.write_login(user_name: "new", password: "new")).to be(false)
+      expect(credentials.login_matches?(**login)).to be(true)
+    end
+
+    it "isn't redirected to staging by RAILS_CREDENTIALS_ENV" do
+      ENV["RAILS_CREDENTIALS_ENV"] = "staging"
+
+      expect(credentials.write_login(**login)).to be(true)
+      expect(app.join("config/credentials/production.yml.enc")).to exist
+      expect(app.join("config/credentials/staging.key")).not_to exist
+    end
+
+    it "tells a wrong key from invalid YAML" do
+      credentials.write_login(**login)
+      expect(described_class.new(root: app.to_s).readable).to eq(:readable)
+
+      key = app.join("config/credentials/production.key")
+      good = key.read
+      key.write("0" * 32)
+      expect(described_class.new(root: app.to_s).readable).to eq(:wrong_key)
+
+      key.write(good)
+      raw_write("smtp: bad: yaml: here\n")
+      expect(described_class.new(root: app.to_s).readable).to eq(:invalid_yaml)
+    end
+
+    it "reads a file with an alias and a date, as the app does" do
+      raw_write(%(base: &b\n  a: 1\ncopy: *b\nwhen: 2026-01-01\nmailer:\n  from: hi@acme.example\nsmtp:\n  user_name: "u"\n  password: "p"\n))
+
+      expect(credentials.readable).to eq(:readable)
+      expect(credentials.login_matches?(user_name: "u", password: "p")).to be(true)
+      expect(credentials.mailer_from).to eq("hi@acme.example")
+    end
+
+    it "sees a missing login field" do
+      raw_write(%(smtp:\n  user_name: "u"\n))
+
+      expect(credentials.login?).to be(false)
+    end
+
+    context "with a recording bin/rails" do
+      let(:log) { app.join("rails.log") }
+
+      before do
+        FileUtils.mv(app.join("bin/rails"), app.join("bin/rails.real"))
+        app.join("bin/rails").write(<<~SHIM)
+          #!/usr/bin/env ruby
+          require "json"; File.write(#{log.to_s.inspect}, JSON.generate(argv: ARGV, env: ENV.to_h) + "\\n", mode: "a")
+          exec(File.expand_path("rails.real", __dir__), *ARGV)
+        SHIM
+        app.join("bin/rails").chmod(0o755)
+      end
+
+      def leaks(text, secrets) = secrets.select { |secret| text.include?(secret) }
+
+      it "keeps the login and key out of arguments, environment and deploy.yml" do
+        ENV["VISUAL"] = "decoy"
+        credentials.write_login(**login)
+        credentials.login_matches?(**login)
+        key = app.join("config/credentials/production.key").read.strip
+
+        edit = log.readlines.map { |line| JSON.parse(line) }.find { |call| call["argv"].first == "credentials:edit" }
+
+        expect(leaks(log.read + app.join("config/deploy.yml").read, [ login[:user_name], login[:password], key ])).to be_empty
+        expect(edit["env"]["VISUAL"]).to include("--write-login")
+        expect(edit["env"].key?("RAILS_CREDENTIALS_ENV")).to be(false)
+      end
+
+      it "has a scanner that finds a planted secret" do
+        log.write("planted-sentinel")
+
+        expect(leaks(log.read, [ "planted-sentinel" ])).to eq([ "planted-sentinel" ])
+      end
+    end
+  end
+
+  describe "bin/mail-setup --write-login" do
+    let(:dir) { Pathname.new(Dir.mktmpdir) }
+    let(:file) { dir.join("credentials.yml") }
+
+    after { FileUtils.rm_rf(dir) }
+
+    def stand_in(stdin)
+      Open3.capture3(RbConfig.ruby, Rails.root.join("bin/mail-setup").to_s, "--write-login", file.to_s, stdin_data: stdin)
+    end
+
+    it "writes the login when the edit is safe, printing nothing" do
+      file.write("a: 1\n")
+      out, err, status = stand_in(%({"user_name":"u","password":"p"}))
+
+      expect([ out, status.exitstatus ]).to eq([ "", 0 ])
+      expect(err.lines.grep(/\bp\b/)).to be_empty
+      expect(YAML.unsafe_load(file.read)["smtp"]).to eq("user_name" => "u", "password" => "p")
+    end
+
+    it "leaves a file it can't edit safely untouched, exits 1 and prints nothing" do
+      file.write("a: b: c\n")
+      out, _err, status = stand_in(%({"user_name":"FAKESECRET","password":"FAKESECRET"}))
+
+      expect(file.read).to eq("a: b: c\n")
+      expect([ out, status.exitstatus ]).to eq([ "", 1 ])
+    end
+
+    it "prints no value when its input is broken" do
+      file.write("a: 1\n")
+      out, err, status = stand_in("FAKESECRET not json")
+
+      expect(file.read).to eq("a: 1\n")
+      expect(status.exitstatus).to eq(1)
+      expect(out + err).not_to include("FAKESECRET")
     end
   end
 end

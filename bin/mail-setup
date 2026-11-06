@@ -4,6 +4,9 @@
 # bin/mail-setup: configures this fork's production mail. See /docs/developer/deployment.
 
 require "json"
+require "open3"
+require "rbconfig"
+require "shellwords"
 require "yaml"
 require_relative "../lib/clean_git_env"
 
@@ -97,6 +100,101 @@ class MailSetup
     end
     private_class_method :scalar
   end
+
+  # Runs as Rails' editor: stdin carries the login, and its output is discarded.
+  module StandIn
+    def self.run(path, input = $stdin)
+      answers = JSON.parse(input.read)
+      login = { user_name: answers.fetch("user_name"), password: answers.fetch("password") }
+      before = File.read(path)
+      after = CredentialsText.with_login(before, **login)
+      return 1 unless CredentialsText.safe_edit?(before, after, **login)
+
+      File.write(path, after)
+      0
+    rescue StandardError
+      1
+    end
+  end
+
+  class ProductionCredentials
+    FILE = "config/credentials/production.yml.enc"
+    PROBLEMS = {
+      /ActiveSupport::MessageEncryptor::InvalidMessage/ => :wrong_key,
+      /InvalidContentError|Psych::/ => :invalid_yaml
+    }.freeze
+
+    def initialize(root:, env: {})
+      @root = root
+      @env = env
+    end
+
+    def exists? = File.exist?(File.join(@root, FILE))
+
+    def readable
+      return :readable unless exists?
+
+      stored
+      @problem || :readable
+    end
+
+    def login?
+      login = stored["smtp"]
+      login.is_a?(Hash) && %w[user_name password].all? { |field| !login[field].to_s.strip.empty? }
+    end
+
+    def login_matches?(user_name:, password:)
+      stored["smtp"] == { "user_name" => user_name, "password" => password }
+    end
+
+    def mailer_from
+      mailer = stored["mailer"]
+      mailer["from"] if mailer.is_a?(Hash)
+    end
+
+    def write_login(user_name:, password:)
+      env = child_env.merge("VISUAL" => stand_in_command)
+      command = %w[bin/rails credentials:edit --environment production]
+      IO.popen(env, command, "w", out: File::NULL, err: File::NULL, chdir: @root) do |editor|
+        editor.write(JSON.generate(user_name:, password:))
+      end
+      @stored = nil
+      $?.success? && login_matches?(user_name:, password:)
+    rescue Errno::EPIPE
+      false
+    end
+
+    private
+
+    def child_env = CleanGitEnv::HASH.merge("RAILS_CREDENTIALS_ENV" => nil).merge(@env)
+
+    def stand_in_command
+      [ RbConfig.ruby, File.join(@root, "bin/mail-setup"), "--write-login" ].map { |part| Shellwords.escape(part) }.join(" ")
+    end
+
+    def stored
+      @stored ||= show
+    end
+
+    def show
+      @problem = nil
+      out, err, status = Open3.capture3(child_env, "bin/rails", "credentials:show", "--environment", "production", chdir: @root)
+      unless status.success?
+        @problem = PROBLEMS.find { |pattern, _| err.match?(pattern) }&.last || :unknown
+        return {}
+      end
+
+      parsed = YAML.unsafe_load(out)
+      parsed.is_a?(Hash) ? parsed : {}
+    rescue Psych::Exception
+      @problem = :invalid_yaml
+      {}
+    end
+  end
 end
 
-abort("bin/mail-setup: not finished") if $PROGRAM_NAME == __FILE__
+if $PROGRAM_NAME == __FILE__
+  exit MailSetup::StandIn.run(ARGV.last) if ARGV.first == "--write-login"
+
+  abort("bin/mail-setup: not finished")
+end
