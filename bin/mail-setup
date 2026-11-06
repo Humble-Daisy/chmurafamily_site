@@ -30,6 +30,73 @@ class MailSetup
       false
     end
   end
+
+  module DeployFile
+    def self.values(text)
+      clear = parse(text).dig("env", "clear")
+      clear.is_a?(Hash) ? clear.transform_values(&:to_s) : {}
+    rescue Psych::Exception, TypeError
+      {}
+    end
+
+    def self.editable?(text)
+      values(text).key?("SMTP_ADDRESS") && !address_index(text.lines).nil?
+    end
+
+    def self.with_values(text, values)
+      lines = text.lines
+      previous = address_index(lines)
+      indent = lines[previous][/\A\s+/]
+      values.each do |key, value|
+        line = "#{indent}#{key}: #{scalar(value)}\n"
+        if (found = key_index(lines, key, previous))
+          lines[found] = line
+          previous = found
+        else
+          lines.insert(previous += 1, line)
+        end
+      end
+      lines.join
+    end
+
+    def self.safe_edit?(before, after, values)
+      old = parse(before)
+      new = parse(after)
+      return false unless self.values(after) == self.values(before).merge(values)
+
+      without_clear(old) == without_clear(new)
+    rescue Psych::Exception, TypeError
+      false
+    end
+
+    def self.parse(text)
+      parsed = YAML.safe_load(text, aliases: true)
+      parsed.is_a?(Hash) ? parsed : {}
+    end
+    private_class_method :parse
+
+    def self.without_clear(config)
+      config.merge("env" => config["env"].to_h.except("clear"))
+    end
+    private_class_method :without_clear
+
+    def self.address_index(lines)
+      env = lines.index { |line| line.start_with?("env:") } or return
+      clear = (env + 1...lines.size).find { |i| lines[i].match?(/\A\s+clear:/) } or return
+      (clear + 1...lines.size).find { |i| lines[i].match?(/\A\s+SMTP_ADDRESS:/) }
+    end
+    private_class_method :address_index
+
+    def self.key_index(lines, key, from)
+      (from...lines.size).find { |i| lines[i].match?(/\A\s+(# )?#{key}:/) }
+    end
+    private_class_method :key_index
+
+    def self.scalar(value)
+      value.match?(/\A[A-Za-z0-9][\w.@-]*\z/) ? value : value.to_json
+    end
+    private_class_method :scalar
+  end
 end
 
 abort("bin/mail-setup: not finished") if $PROGRAM_NAME == __FILE__

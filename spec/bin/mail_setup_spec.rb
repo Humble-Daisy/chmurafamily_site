@@ -76,4 +76,81 @@ RSpec.describe MailSetup do
       expect(described_class.safe_edit?("a: 1\n", "a: b: c\n", **login)).to be(false)
     end
   end
+
+  describe MailSetup::DeployFile do
+    let(:real) { Rails.root.join("config/deploy.yml").read }
+    let(:values) { { "SMTP_ADDRESS" => "email-smtp.us-east-1.amazonaws.com", "SMTP_PORT" => "587", "MAIL_FROM" => "hi@acme.example" } }
+    let(:mail_from_comment) { real.lines.grep(/# MAIL_FROM:/) }
+
+    def clear_values(text) = YAML.safe_load(text, aliases: true).dig("env", "clear")
+
+    it "sets all three values and keeps every other comment" do
+      after = described_class.with_values(real, values)
+
+      expect(clear_values(after)).to include("SMTP_ADDRESS" => values["SMTP_ADDRESS"], "SMTP_PORT" => 587, "MAIL_FROM" => "hi@acme.example")
+      expect(after.lines.grep(/^\s*#/)).to eq(real.lines.grep(/^\s*#/) - mail_from_comment)
+    end
+
+    it "leaves an existing MAIL_FROM alone when none is given" do
+      with_sender = described_class.with_values(real, values)
+      after = described_class.with_values(with_sender, values.except("MAIL_FROM").merge("SMTP_ADDRESS" => "smtp.example.org"))
+
+      expect(clear_values(after)).to include("MAIL_FROM" => "hi@acme.example", "SMTP_ADDRESS" => "smtp.example.org")
+    end
+
+    it "keeps the MAIL_FROM comment when no sender is given" do
+      expect(described_class.with_values(real, values.except("MAIL_FROM"))).to include(mail_from_comment.first)
+    end
+
+    it "inserts the port and sender directly after the address when they're absent" do
+      bare = "env:\n  clear:\n    SMTP_ADDRESS: old.example\n    OTHER: 1\n"
+      after = described_class.with_values(bare, values)
+
+      expect(after).to eq("env:\n  clear:\n    SMTP_ADDRESS: email-smtp.us-east-1.amazonaws.com\n    SMTP_PORT: 587\n    MAIL_FROM: hi@acme.example\n    OTHER: 1\n")
+    end
+
+    it "keeps a display name intact" do
+      after = described_class.with_values(real, values.merge("MAIL_FROM" => "Acme: Sales <hi@acme.example>"))
+
+      expect(clear_values(after)["MAIL_FROM"]).to eq("Acme: Sales <hi@acme.example>")
+    end
+
+    it "is editable only with an uncommented SMTP_ADDRESS under env.clear" do
+      expect(described_class.editable?(real)).to be(true)
+      expect(described_class.editable?("env:\n  clear:\n    # SMTP_ADDRESS: x\n")).to be(false)
+      expect(described_class.editable?("env:\n  secret:\n    - SMTP_ADDRESS\n")).to be(false)
+      expect(described_class.editable?("other:\n  SMTP_ADDRESS: x\n")).to be(false)
+      expect(described_class.editable?("")).to be(false)
+      expect(described_class.editable?(":bad: [")).to be(false)
+    end
+
+    it "reads the plain values under env.clear" do
+      expect(described_class.values(real)).to include("SMTP_ADDRESS" => "smtp.postmarkapp.com")
+      expect(described_class.values(":bad: [")).to eq({})
+    end
+
+    it "accepts a good edit" do
+      expect(described_class.safe_edit?(real, described_class.with_values(real, values), values)).to be(true)
+    end
+
+    it "refuses an edit that changed another value" do
+      before = "env:\n  clear:\n    SMTP_ADDRESS: a\n    OTHER: 1\n"
+      after = "env:\n  clear:\n    SMTP_ADDRESS: b\n    OTHER: 2\n"
+
+      expect(described_class.safe_edit?(before, after, { "SMTP_ADDRESS" => "b" })).to be(false)
+    end
+
+    it "refuses an edit that doesn't hold the answer" do
+      before = "env:\n  clear:\n    SMTP_ADDRESS: a\n"
+
+      expect(described_class.safe_edit?(before, before, { "SMTP_ADDRESS" => "b" })).to be(false)
+    end
+
+    it "refuses an edit that changed anything outside env.clear" do
+      before = "service: a\nenv:\n  clear:\n    SMTP_ADDRESS: a\n"
+      after = "service: b\nenv:\n  clear:\n    SMTP_ADDRESS: b\n"
+
+      expect(described_class.safe_edit?(before, after, { "SMTP_ADDRESS" => "b" })).to be(false)
+    end
+  end
 end

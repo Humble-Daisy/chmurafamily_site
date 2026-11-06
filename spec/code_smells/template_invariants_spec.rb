@@ -1256,6 +1256,15 @@ RSpec.describe "Template invariants" do
     end
   end
 
+  describe "bin/mail-setup can edit the shipped deploy.yml" do
+    it "finds SMTP_ADDRESS under env.clear" do
+      skip "fork — a fork may have rewritten config/deploy.yml" if root.join(".fork.yml").exist?
+      load root.join("bin/mail-setup")
+
+      expect(MailSetup::DeployFile.editable?(File.read(root.join("config/deploy.yml")))).to be(true)
+    end
+  end
+
   # bin scripts in this repo are spec'd by `load`ing them (see
   # spec/bin/parallel_rspec_spec.rb), which only works because the top-level
   # invocation is guarded. Without the guard, loading a script in a spec RUNS
