@@ -50,6 +50,13 @@ RSpec.describe RequiredProductionConfig do
     describe "outbound mail" do
       let(:host) { { "RAILS_HOST" => "app.humbledaisy.com" } }
 
+      it "gives a staging command that works, because --environment staging refuses" do
+        expect { described_class.check!(host) }.to raise_error(RuntimeError) { |error|
+          expect(error.message).to include("RAILS_CREDENTIALS_ENV=staging")
+          expect(error.message).not_to include("--environment staging")
+        }
+      end
+
       it "raises when SMTP_ADDRESS is unset" do
         expect { described_class.check!(host) }
           .to raise_error(RuntimeError, /SMTP_ADDRESS is unset/)

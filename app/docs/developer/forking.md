@@ -221,6 +221,9 @@ bin/rails credentials:edit --environment development
 bin/rails credentials:edit --environment production
 ```
 
+`bin/mail-setup` handles the mail half of this: it creates the production credentials if
+they don't exist, adds the provider's login, and updates `config/deploy.yml`.
+
 Add OAuth keys and `mailer.from` (structure in [Getting Started](/docs/developer/getting-started)),
 and to production the mail provider's login as `smtp.user_name` and `smtp.password`
 ([Deployment](/docs/developer/deployment#4-configure-outbound-mail)) and, once
@@ -530,7 +533,7 @@ and opens the PR.
 | ----------- | ---------- |
 | `CHANGELOG.md` | Never — `bin/sync` keeps yours before it stops |
 | Fork-owned paths | Shouldn't happen — the driver keeps yours. If it does, the driver isn't active: `git merge --abort`, run `git config merge.ours.driver true`, then `bin/sync` again |
-| Identity values (`config/deploy.yml` service/image/volumes, `config/application.rb` module) | Keep your names; take any structural changes around them |
+| Identity values (`config/deploy.yml` service/image/volumes, `SMTP_*`, `MAIL_FROM`, `RAILS_HOST`; `config/application.rb` module) | Keep your values; take any structural changes around them. Taking theirs on `SMTP_ADDRESS` puts the old host beside your new login, and the boot check can't see that |
 | `Gemfile` | Keep **both** sides' gems, then regenerate the lockfile |
 | `Gemfile.lock` | Never hand-merge: `git checkout --theirs Gemfile.lock`, then `bundle install`, commit the regenerated result |
 | Behavior (app code, specs, config) | Take theirs — unless you deliberately diverged, in which case consider sending your version upstream instead |

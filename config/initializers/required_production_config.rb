@@ -72,7 +72,7 @@ module RequiredProductionConfig
       Fix: point SMTP_ADDRESS at your provider and put its login in credentials
         - SMTP_ADDRESS: under env.clear in config/deploy.yml (Kamal), or the environment
         - smtp.user_name and smtp.password: bin/rails credentials:edit --environment production
-          (staging: --environment staging), then redeploy
+          (staging: RAILS_ENV=production RAILS_CREDENTIALS_ENV=staging bin/rails credentials:edit), then redeploy
 
       Details: /docs/developer/deployment (Configure outbound mail section).
       Opting out for good: git rm config/initializers/required_production_config.rb

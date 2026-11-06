@@ -88,6 +88,7 @@ Next steps:
 For deployment with Kamal:
   1. Edit config/deploy.yml (server IP, registry, app name)
   2. Set KAMAL_REGISTRY_PASSWORD in .kamal/secrets
-  3. Run: bin/kamal setup
+  3. Run: bin/deploy-guide kamal, for mail and the other settings production requires
+  4. Run: bin/kamal setup
 NEXT_STEPS
 fi

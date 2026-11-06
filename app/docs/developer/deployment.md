@@ -223,6 +223,12 @@ the box through Action Mailer, so a deployment with no mail server boots,
 reports healthy at `/up`, and nobody can sign in. The preflight guard refuses
 that boot, which is why this step sits before the first deploy.
 
+**The quick way:** run `bin/mail-setup`. It asks for your provider and login,
+writes them to the production credentials and `config/deploy.yml`, and closes by
+saying what to commit, what production still refuses and how to prove delivery.
+Run it again to swap providers or replace a login. The recipes below are the same
+steps by hand.
+
 Mail leaves over SMTP. Where it goes comes from the environment and how it
 signs in comes from the credentials, which keep every app-runtime secret.
 Every provider named below speaks SMTP, so moving between them is a change of
@@ -287,6 +293,13 @@ settings; the differences are where the values come from.
    SMTP_PORT: 587
    ```
 
+#### Any other SMTP server
+
+Set `SMTP_ADDRESS` and `SMTP_PORT`, and put the login in the credentials as above.
+The app always signs in with `:plain` over STARTTLS. Port 465, which uses implicit
+TLS, needs a change to `lib/mail_delivery.rb`. A relay that takes no login needs that
+and a change to the boot check, which refuses a blank login.
+
 #### Domain authentication, whichever provider
 
 Send from a subdomain you reserve for the app's mail (`mail.yourdomain.com`),
@@ -313,9 +326,52 @@ campaign should never cost a sign-in link its reputation.
   exceed the hours it takes to run one. Deliverability — IP reputation,
   warm-up, blocklists — is the cost that moves from the provider to you.
 
-To check a deployment: request a magic link for your own address and read the
-mail. If nothing arrives, `kamal app logs` shows the failed job with the
+To check a deployment: request a magic link for an account that exists and read
+the mail. With invite-only sign-up, an address with no account gets the normal page
+and no email, so create your account first
+([Day one](operations#day-one-on-an-invite-only-instance)) and test other addresses
+by inviting them. If nothing arrives, `kamal app logs` shows the failed job with the
 provider's response.
+
+#### Open sign-up
+
+`SIGNUP_MODE: open` under `env.clear` lets anyone register, so the app sends mail to
+any address it's given. The template limits requests per IP and per recipient, but
+has no daily ceiling and no bot check, so a wave of signups across many addresses
+can reach your provider's complaint limits. Add those before opening sign-up on an
+app whose provider account you share with other apps.
+
+#### Separating kinds of mail later
+
+Transactional mail is all the template ships. When an app starts sending
+another kind, such as a broadcast, give that mailer its own settings. Nothing
+else changes, and a mailer that declares nothing stays on the settings above:
+
+```ruby
+class BroadcastMailer < ApplicationMailer
+  self.smtp_settings = MailDelivery.smtp_settings.merge(
+    address: ENV["BROADCAST_SMTP_ADDRESS"],
+    user_name: Rails.application.credentials.dig(:smtp_broadcast, :user_name),
+    password: Rails.application.credentials.dig(:smtp_broadcast, :password)
+  )
+  self.deliver_later_queue_name = :low
+end
+```
+
+Then add those settings, and publish that kind's DNS on its own subdomain.
+
+- **Blank settings:** `merge` overrides even with `nil`, so a mailer with blank
+  settings can't fall through to the transactional login. A mailer that leaves
+  this block out does send as transactional.
+- **The boot check:** it stays about sign-in. A broken broadcast setup doesn't
+  stop the app booting; it shows up as that mailer's failed jobs.
+- **The queue:** a subclass inherits `mailers`, the queue sign-in mail is claimed
+  from first, so a large send without its own queue would hold up sign-in links.
+- **A provider's streams:** if a provider selects a stream by header, add
+  `default "Header-Name": "value"` to the mailer, using the name from its docs.
+- **No usable SMTP:** set `self.delivery_method` in that mailer for production
+  only, and add the provider's gem. Set unconditionally, it overrides `:test` and
+  the development delivery method, so those environments could send real mail.
 
 ### 5. Point DNS, then deploy
 
