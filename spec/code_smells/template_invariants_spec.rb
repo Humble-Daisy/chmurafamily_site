@@ -1263,7 +1263,7 @@ RSpec.describe "Template invariants" do
   # `git remote rename` and a commit. Asserted on source because the safe way
   # to test "loading is safe" cannot itself be to load it.
   describe "bin scripts are safe to load in a spec" do
-    %w[bin/fork bin/parallel-rspec].each do |script|
+    %w[bin/fork bin/mail-setup bin/parallel-rspec].each do |script|
       it "#{script} guards top-level execution behind $PROGRAM_NAME" do
         source = File.read(root.join(script))
 

@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# bin/mail-setup: configures this fork's production mail. See /docs/developer/deployment.
+
+require "json"
+require "yaml"
+require_relative "../lib/clean_git_env"
+
+class MailSetup
+  module CredentialsText
+    def self.with_login(text, user_name:, password:)
+      block = "smtp:\n  user_name: #{user_name.to_json}\n  password: #{password.to_json}\n"
+      lines = text.lines
+      start = lines.index { |line| line.start_with?("smtp:") }
+      return "#{text.rstrip}\n\n#{block}".lstrip unless start
+
+      stop = (start + 1...lines.size).find { |i| lines[i].match?(/\A\S/) } || lines.size
+      stop -= 1 while lines[stop - 1].strip.empty?
+      (lines[0...start] + [ block ] + lines[stop..]).join
+    end
+
+    def self.safe_edit?(before, after, user_name:, password:)
+      old, new = [ before, after ].map { |text| YAML.unsafe_load(text) || {} }
+      return false unless old.is_a?(Hash) && new.is_a?(Hash)
+
+      new["smtp"] == { "user_name" => user_name, "password" => password } &&
+        new.except("smtp") == old.except("smtp")
+    rescue Psych::Exception
+      false
+    end
+  end
+end
+
+abort("bin/mail-setup: not finished") if $PROGRAM_NAME == __FILE__
