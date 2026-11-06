@@ -1269,6 +1269,7 @@ RSpec.describe "Template invariants" do
       mail = deploy.index("# Outbound mail:")
       expect(deploy.index("# SIGNUP_MODE: open")).to be < mail
       expect(deploy.index("# WORKSPACE_ON_SIGNUP:")).to be < mail
+      expect(deploy.index("# TENANCY_SHARED_WORKSPACE_SLUG:")).to be < mail
     end
 
     it "doesn't send .env.example readers to a removed route" do

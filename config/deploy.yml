@@ -81,7 +81,9 @@ env:
     # OBJECT_STORAGE_REGION: eu-central-003
 
     # SIGNUP_MODE: open   # default: invite_only. Read Open sign-up in /docs/developer/deployment first
+
     # WORKSPACE_ON_SIGNUP: shared   # must match the preset bin/fork set
+    # TENANCY_SHARED_WORKSPACE_SLUG: your_app   # production refuses to boot on shared without it
 
     # Outbound mail: the server here, its login in credentials (smtp.user_name, smtp.password).
     # Production refuses to boot without both. Recipes: /docs/developer/deployment.

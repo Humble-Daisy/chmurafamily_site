@@ -297,7 +297,8 @@ settings; the differences are where the values come from.
 
 Set `SMTP_ADDRESS` and `SMTP_PORT`, and put the login in the credentials as above.
 The app always signs in with `:plain` over STARTTLS. Port 465, which uses implicit
-TLS, and a relay that takes no login both need a change to `lib/mail_delivery.rb`.
+TLS, needs a change to `lib/mail_delivery.rb`. A relay that takes no login needs that
+and a change to the boot check, which refuses a blank login.
 
 #### Domain authentication, whichever provider
 
