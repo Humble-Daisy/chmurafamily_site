@@ -335,6 +335,98 @@ class MailSetup
     end
   end
 
+  module ClosingMessage
+    def self.text(provider:, address:, port:, sender:, changed_files:, first_run:, deploy_written:, signup_mode:,
+                  preset:, preset_in_deploy:, rails_host:, master_key_set:, app_name:, warnings:)
+      step = 0
+      numbered = ->(line) { "  #{step += 1}. #{line}" }
+      lines = [ "", "Mail is configured for production, but nothing has been sent yet." ]
+      lines << "  #{provider}: #{address}, sending as #{sender || "noreply@ your RAILS_HOST"}"
+      lines << "  config/deploy.yml wasn't updated, so set the values at the end by hand." unless deploy_written
+      lines.concat(status_warnings(sender:, rails_host:, master_key_set:, preset:, preset_in_deploy:, warnings:))
+
+      lines.push("", "Do this now")
+      if changed_files.any?
+        lines << numbered.("Commit these together, because CI deploys what's committed:")
+        lines << "       git add #{changed_files.join(" ")}"
+      end
+      if first_run
+        lines << numbered.("Save config/credentials/production.key in your team's password manager,")
+        lines << %(     labelled "#{app_name}". Without it, nobody can read these credentials.)
+        lines << "     It is never committed."
+      end
+      lines << "  Careful: git diff, git show, git log -p and git commit -v show that file"
+      lines << "  decrypted. Don't run them on a shared screen."
+
+      lines.push("", "Before you deploy")
+      lines << numbered.("Production also refuses to start until these are set:")
+      lines << "       RAILS_HOST, under env.clear in config/deploy.yml"
+      lines << "       The encryption keys: run bin/rails db:encryption:init once, and paste"
+      lines << "         its block into bin/rails credentials:edit --environment production"
+      lines << "       Any backup destination you started"
+      lines << "     Details: /docs/developer/deployment (Production preflight)"
+      lines << numbered.("Check that your provider shows the domain and DNS records as verified.")
+      if provider == "Amazon SES"
+        lines << "     Request production access too. A new account starts in a sandbox, where a"
+        lines << "     test to your own address passes and invitations later fail."
+      end
+      lines << numbered.("For the deployment itself, run bin/deploy-guide")
+
+      lines.push("", "After you deploy, prove it")
+      lines.concat(proof_steps(numbered, signup_mode:, preset:))
+      lines << numbered.("No email? bin/kamal logs shows failed jobs. The usual causes are a wrong")
+      lines << "     login or an unverified domain. There is also a limit of 5 links per address"
+      lines << "     per 15 minutes, which shows nothing on screen."
+      lines << numbered.("Now and then, check your provider's dashboard for suppressed addresses.")
+      lines << "     A suppressed sign-in looks like success to this app."
+
+      lines.push("", "Not using Kamal? Set these in your platform's environment:")
+      lines << "  SMTP_ADDRESS=#{address}" << "  SMTP_PORT=#{port}"
+      lines << "  MAIL_FROM=#{sender}" if sender
+      lines.join("\n")
+    end
+
+    def self.status_warnings(sender:, rails_host:, master_key_set:, preset:, preset_in_deploy:, warnings:)
+      found = warnings.map { |warning| "  #{warning}" }
+      found << "  #{sender}'s domain doesn't match RAILS_HOST (#{rails_host}). Check it's the domain you verified." if domain_differs?(sender, rails_host)
+      found << "  RAILS_MASTER_KEY is set in this shell. A deploy from here sends that key, not production.key. Unless it's meant for this app, run `unset RAILS_MASTER_KEY` first." if master_key_set
+      if preset && preset != "personal" && !preset_in_deploy
+        found << "  You chose the #{preset} preset, but config/deploy.yml doesn't set WORKSPACE_ON_SIGNUP, so production would use the default."
+        found << "  The shared preset also needs TENANCY_SHARED_WORKSPACE_SLUG there." if preset == "shared"
+      end
+      found
+    end
+    private_class_method :status_warnings
+
+    def self.proof_steps(numbered, signup_mode:, preset:)
+      if preset == "shared"
+        return [ numbered.("The seed created the owner from TENANCY_OWNER_EMAIL. Claim it with its setup"),
+                 "     link: /docs/developer/operations (Day one), run in production through bin/kamal.",
+                 numbered.("Request a magic link for that address and read the email.") ]
+      end
+      if signup_mode == "open"
+        return [ numbered.("Register through the normal sign-up flow, and read the email it sends.") ]
+      end
+
+      [ numbered.("Create your account in production:"),
+        "       bin/kamal console",
+        %(       User.create!(email_address: "you@example.org", first_name: "You", last_name: "Name")),
+        numbered.("Request a magic link for that address and read the email."),
+        "     With invite-only sign-up, an address with no account gets no email.",
+        "     To test another address, invite it." ]
+    end
+    private_class_method :proof_steps
+
+    def self.domain_differs?(sender, rails_host)
+      return false if sender.nil? || rails_host.to_s.empty?
+
+      domain = sender[/@([^>\s]+)/, 1].to_s.downcase
+      host = rails_host.downcase
+      domain != host && !domain.end_with?(".#{host}") && !host.end_with?(".#{domain}")
+    end
+    private_class_method :domain_differs?
+  end
+
   PROVIDERS = [ "Postmark", "Amazon SES", "Other SMTP server" ].freeze
   DEPLOY_FILE = "config/deploy.yml"
   STAGING_FILE = "config/credentials/staging.yml.enc"
@@ -353,6 +445,7 @@ class MailSetup
     changes = KeyDecision.decide(root: @root, env: @env)
     @credentials ||= ProductionCredentials.new(root: @root, env: changes)
     check_readable!
+    @first_run = !@credentials.exists?
     confirm_replacing_root!
     open
     answers = ask
@@ -459,8 +552,36 @@ class MailSetup
       values.each { |key, value| say "  #{key}=#{value}" }
       return 1
     end
-    warnings.each { |warning| say warning }
+    say closing_message(answers, deploy_written: outcome == :written, warnings:)
     0
+  end
+
+  def closing_message(answers, deploy_written:, warnings:)
+    values = DeployFile.values(deploy_text)
+    ClosingMessage.text(
+      provider: answers[:provider], address: answers[:address], port: answers[:port],
+      sender: answers[:sender] || current_sender, changed_files:, first_run: @first_run && !answers[:login].nil?,
+      deploy_written:, signup_mode: values["SIGNUP_MODE"], preset: fork_config["preset"],
+      preset_in_deploy: values.key?("WORKSPACE_ON_SIGNUP"), rails_host: values["RAILS_HOST"],
+      master_key_set: !@env["RAILS_MASTER_KEY"].to_s.strip.empty?,
+      app_name: fork_config["name"] || File.basename(@root), warnings:
+    )
+  end
+
+  def changed_files
+    paths = [ ProductionCredentials::FILE, DEPLOY_FILE, ".gitignore" ]
+    out, = Open3.capture2(CleanGitEnv::HASH, "git", "-C", @root, "status", "--porcelain", "-uall", "--", *paths, err: File::NULL)
+    changed = out.lines.map { |line| line[3..].strip }
+    paths.select { |path| changed.include?(path) }
+  end
+
+  def fork_config
+    @fork_config ||= begin
+      parsed = YAML.safe_load_file(path(".fork.yml"))
+      parsed.is_a?(Hash) ? parsed : {}
+    rescue Errno::ENOENT, Psych::Exception
+      {}
+    end
   end
 
   def swap_warnings(answers)

@@ -872,12 +872,140 @@ RSpec.describe MailSetup do
       expect(output.string).not_to include("SENTINEL-LOGIN")
     end
 
+    it "closes with what changed, the status and no login" do
+      flow("1", "SENTINEL-LOGIN", "hi@acme.example").run
+
+      expect(output.string).to include("Postmark: smtp.postmarkapp.com, sending as hi@acme.example", "git add config/deploy.yml\n")
+      expect(output.string).not_to include("SENTINEL-LOGIN")
+    end
+
+    it "uses the app's name and preset from .fork.yml" do
+      root.join(".fork.yml").write("name: my_app\npreset: shared\n")
+      flow("1", "tok", "").run
+
+      expect(output.string).to include('labelled "my_app"', "TENANCY_OWNER_EMAIL")
+    end
+
+    it "skips the key backup when the login was kept" do
+      allow(credentials).to receive(:login?).and_return(true)
+      flow("1", "", "").run
+
+      expect(output.string).not_to include("password manager")
+    end
+
     it "prints a fixed sentence for an unexpected error, without its message" do
       allow(credentials).to receive(:write_login).and_raise(StandardError, "FAKE-LOGIN in a message")
 
       expect(flow("1", "tok", "").run).to eq(1)
       expect(output.string).not_to include("FAKE-LOGIN")
       expect(output.string).to include("stopped")
+    end
+  end
+
+  describe MailSetup::ClosingMessage do
+    let(:defaults) do
+      {
+        provider: "Postmark", address: "smtp.postmarkapp.com", port: "587", sender: "hello@example.org",
+        changed_files: %w[config/credentials/production.yml.enc config/deploy.yml .gitignore], first_run: true,
+        deploy_written: true, signup_mode: nil, preset: nil, preset_in_deploy: false, rails_host: nil,
+        master_key_set: false, app_name: "my_app", warnings: []
+      }
+    end
+
+    def text(**overrides) = described_class.text(**defaults, **overrides)
+
+    it "says everything the design asks for, in order" do
+      expected = [
+        "nothing has been sent yet",
+        "Postmark: smtp.postmarkapp.com, sending as hello@example.org",
+        "Do this now",
+        "git add config/credentials/production.yml.enc config/deploy.yml .gitignore",
+        "config/credentials/production.key", 'labelled "my_app"',
+        "git diff, git show, git log -p and git commit -v",
+        "Before you deploy",
+        "RAILS_HOST", "bin/rails db:encryption:init", "backup destination", "Production preflight",
+        "verified", "bin/deploy-guide",
+        "After you deploy",
+        "bin/kamal console", "User.create!", "an address with no account gets no email",
+        "bin/kamal logs", "5 links", "suppressed",
+        "SMTP_ADDRESS=smtp.postmarkapp.com", "SMTP_PORT=587", "MAIL_FROM=hello@example.org"
+      ]
+      positions = expected.map { |phrase| text.index(phrase) }
+
+      expect(positions).to all(be_an(Integer))
+      expect(positions).to eq(positions.sort)
+    end
+
+    it "drops the key backup when it isn't a first run" do
+      expect(text(first_run: false)).not_to include("password manager")
+    end
+
+    it "names only the files that changed, and numbers the steps in order" do
+      message = text(changed_files: %w[config/deploy.yml], first_run: false)
+
+      expect(message).to include("git add config/deploy.yml\n")
+      expect(message.scan(/^\s+(\d+)\. /).flatten.map(&:to_i)).to eq((1..message.scan(/^\s+\d+\. /).size).to_a)
+    end
+
+    it "skips the commit step when nothing changed" do
+      expect(text(changed_files: [], first_run: false)).not_to include("git add")
+    end
+
+    it "says so at the top when deploy.yml wasn't written" do
+      message = text(deploy_written: false)
+
+      expect(message.index("set the values at the end by hand")).to be < message.index("Do this now")
+    end
+
+    it "adds the SES sandbox step for SES alone" do
+      expect(text(provider: "Amazon SES")).to include("production access", "sandbox")
+      expect(text).not_to include("sandbox")
+    end
+
+    it "uses the seeded owner on the shared preset" do
+      message = text(preset: "shared", preset_in_deploy: true)
+
+      expect(message).to include("TENANCY_OWNER_EMAIL")
+      expect(message).not_to include("User.create!")
+    end
+
+    it "says to register under open sign-up, dropping the invite-only lines" do
+      message = text(signup_mode: "open")
+
+      expect(message).to include("Register")
+      expect(message).not_to include("User.create!", "an address with no account")
+    end
+
+    it "warns about an exported key under the status lines" do
+      message = text(master_key_set: true)
+
+      expect(message.index("unset RAILS_MASTER_KEY")).to be < message.index("Do this now")
+    end
+
+    it "warns when the preset isn't set in deploy.yml, naming shared's slug" do
+      expect(text(preset: "shared")).to include("WORKSPACE_ON_SIGNUP", "TENANCY_SHARED_WORKSPACE_SLUG")
+      expect(text(preset: "none")).to include("WORKSPACE_ON_SIGNUP")
+      expect(text(preset: "none")).not_to include("TENANCY_SHARED_WORKSPACE_SLUG")
+      expect(text(preset: "personal")).not_to include("WORKSPACE_ON_SIGNUP")
+      expect(text(preset: "shared", preset_in_deploy: true)).not_to include("WORKSPACE_ON_SIGNUP")
+    end
+
+    it "warns when the sender's domain doesn't fit RAILS_HOST" do
+      expect(text(rails_host: "app.acme.example", sender: "hi@other.example")).to include("doesn't match RAILS_HOST")
+      expect(text(rails_host: "app.acme.example", sender: "hi@acme.example")).not_to include("doesn't match")
+      expect(text(rails_host: "app.acme.example", sender: "Acme <hi@mail.app.acme.example>")).not_to include("doesn't match")
+      expect(text(rails_host: nil, sender: "hi@other.example")).not_to include("doesn't match")
+      expect(text(rails_host: "app.acme.example", sender: nil)).not_to include("doesn't match")
+    end
+
+    it "prints swap warnings under the status lines" do
+      message = text(warnings: [ "A swap warning." ])
+
+      expect(message.index("A swap warning.")).to be < message.index("Do this now")
+    end
+
+    it "leaves MAIL_FROM out of the platform values when no sender is set" do
+      expect(text(sender: nil)).not_to include("MAIL_FROM=")
     end
   end
 end
