@@ -5,13 +5,13 @@ RSpec.describe "Session lifecycle", type: :request do
 
   def sign_in_and_get_session
     sign_in(user)
-    get root_path
+    get workspaces_path
     user.sessions.order(:created_at).last
   end
 
   it "resumes an active session" do
     sign_in(user)
-    get root_path
+    get workspaces_path
     expect(response).to have_http_status(:ok)
   end
 
@@ -50,7 +50,7 @@ RSpec.describe "Session lifecycle", type: :request do
     session.update_columns(last_active_at: (Session.touch_throttle + 1.minute).ago)
     before = session.reload.last_active_at
 
-    get root_path
+    get workspaces_path
     expect(session.reload.last_active_at).to be > before
   end
 end

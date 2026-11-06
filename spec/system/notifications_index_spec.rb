@@ -24,7 +24,7 @@ RSpec.describe "Notifications index page", type: :system do
 
   describe "discoverability (v2: canonical path is the user-menu Notifications row)" do
     it "exposes a Notifications link inside the user-menu dropdown" do
-      visit root_path
+      visit new_session_path
       find("#user-menu-button").click
       within "#user-menu" do
         expect(page).to have_link(I18n.t("navigation.notifications"), href: settings_notifications_path)

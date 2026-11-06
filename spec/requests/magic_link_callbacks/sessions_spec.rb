@@ -13,7 +13,7 @@ RSpec.describe "Magic Link Callback Sessions", type: :request do
       post magic_link_callback_session_path(token)
       expect(MagicLinkToken.find_by(token_digest: MagicLinkToken.digest(token)).consumed_at).to be_present
       expect(response).to redirect_to(root_path)
-      get root_path
+      get workspaces_path
       expect(response).to have_http_status(:ok) # session established
     end
 

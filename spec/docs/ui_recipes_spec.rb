@@ -29,7 +29,9 @@ RSpec.describe "UI recipes" do
   end
 
   it "names only partials that something else in the recipe renders" do
-    unrendered = recipes.flat_map do |recipe, paths|
+    # A recipe that copies from a fork-owned page is checked beside that page, in spec/requests/pages_spec.rb.
+    template_recipes = recipes.reject { |_, paths| paths.any? { |path| path.start_with?("app/views/pages/") } }
+    unrendered = template_recipes.flat_map do |recipe, paths|
       views = paths.select { |p| p.start_with?("app/views/") && p.end_with?(".erb") }
       paths.select { |p| shared_partial?(p) }
         .reject { |partial| (views - [ partial ]).any? { |view| Rails.root.join(view).read.include?(render_name(partial)) } }

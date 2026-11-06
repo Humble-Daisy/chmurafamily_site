@@ -93,6 +93,21 @@ RSpec.describe "Pages", type: :request do
     end
   end
 
+  describe "landing page for a user with no workspace" do
+    it "renders without a 500" do
+      sign_in(create(:user, :with_zero_workspaces))
+      get root_path
+      expect(response).to have_http_status(:ok)
+    end
+  end
+
+  describe "the about page as the public_page recipe's reference" do
+    it "renders the partials the recipe names" do
+      about = Rails.root.join("app/views/pages/about.html.erb").read
+      expect(about).to include("shared/hero", "shared/section")
+    end
+  end
+
   describe "GET /about" do
     it "returns the about page with mission" do
       get page_path(:about)

@@ -2,14 +2,14 @@ require "rails_helper"
 
 RSpec.describe "Footer: Cookie settings reopens Biscuit banner", type: :system do
   it "renders a Cookie settings button in the footer on public pages" do
-    visit root_path
+    visit new_session_path
     within("footer") do
       expect(page).to have_button(I18n.t("footer.cookie_settings"))
     end
   end
 
   it "reopens the Biscuit banner when clicked" do
-    visit root_path
+    visit new_session_path
 
     # Simulate a post-consent state: hide the banner and show the manage-link
     # (exactly what the Biscuit controller does after acceptAll/rejectAll).
@@ -32,14 +32,14 @@ RSpec.describe "Footer: Cookie settings reopens Biscuit banner", type: :system d
   end
 
   it "hides the gem's floating .biscuit-manage-link so only our footer button shows" do
-    visit root_path
+    visit new_session_path
     # The gem still renders it in the DOM; our CSS hides it with display:none !important.
     expect(page).to have_css(".biscuit-manage-link", visible: :hidden)
     expect(page).not_to have_css(".biscuit-manage-link", visible: true)
   end
 
   it "syncs category checkboxes to the saved consent before reopening (no stale state)" do
-    visit root_path
+    visit new_session_path
 
     # Accept all: updates the cookie via a fetch POST, but never touches the
     # (still-in-DOM, just-hidden) category checkboxes — they stay whatever
@@ -65,7 +65,7 @@ RSpec.describe "Footer: Cookie settings reopens Biscuit banner", type: :system d
   end
 
   it "does not offer Cancel on first visit (an explicit consent choice is required)" do
-    visit root_path
+    visit new_session_path
     click_button I18n.t("biscuit.banner.manage") # open the preferences panel
 
     expect(page).to have_button(I18n.t("biscuit.banner.save"))
@@ -74,13 +74,13 @@ RSpec.describe "Footer: Cookie settings reopens Biscuit banner", type: :system d
 
   describe "manage-mode banner (reopened after a fresh page load with consent already given)" do
     before do
-      visit root_path # establish the domain before setting a cookie on it
+      visit new_session_path # establish the domain before setting a cookie on it
       page.driver.browser.cookies.set(
         name: "biscuit_consent",
         value: Biscuit::Consent.build_value(analytics: true, marketing: false, preferences: false).to_json,
         domain: URI.parse(page.current_url).host
       )
-      visit root_path # fresh render: consent.given? is now true server-side
+      visit new_session_path # fresh render: consent.given? is now true server-side
     end
 
     it "renders the banner hidden server-side (no flash), reopens on the footer click, and passes AAA" do

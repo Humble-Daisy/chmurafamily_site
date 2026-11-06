@@ -14,7 +14,7 @@ RSpec.describe "Skip-to-content link", type: :system do
   end
 
   it "is the first thing Tab reaches, and shows itself when focused" do
-    visit root_path
+    visit "/docs"
     cdp_press("Tab")
 
     box = focused_box

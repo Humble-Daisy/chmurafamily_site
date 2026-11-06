@@ -29,7 +29,7 @@ It's the right default for a SQLite + one-VPS template. When you outgrow it, see
 
 ```yaml
 workers:
-  - queues: [ default, mailers, low ]
+  - queues: [ mailers, default, low ]
     threads: 3
     processes: <%= ENV.fetch("JOB_CONCURRENCY", 1) %>
     polling_interval: 0.1
@@ -63,7 +63,7 @@ Or route at perform time:
 SomeJob.set(queue: :low).perform_later(arg)
 ```
 
-Mailer jobs from `Mailer.deliver_later` calls automatically use the `mailers` queue if the Action Mailer adapter is configured for it (the Rails default since 8.0).
+`Mailer.deliver_later` jobs use the `mailers` queue (`config.action_mailer.deliver_later_queue_name` in `config/application.rb`). The worker claims `mailers` first, so a sign-in link goes ahead of backups and sweeps.
 
 ## Recurring jobs
 

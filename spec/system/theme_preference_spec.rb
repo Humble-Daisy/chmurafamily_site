@@ -13,7 +13,7 @@ RSpec.describe "Theme preference", type: :system do
 
   it "follows the OS with no saved preference, including a change while the page is open" do
     emulate_os_scheme("dark")
-    visit root_path
+    visit new_session_path
     expect(page).to have_css("html.dark")
 
     emulate_os_scheme("light")
@@ -21,7 +21,7 @@ RSpec.describe "Theme preference", type: :system do
   end
 
   it "cycles light, dark, then back to following the OS" do
-    visit root_path
+    visit new_session_path
     toggle = find("[data-controller='theme-toggle']")
 
     stops = 3.times.map do

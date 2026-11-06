@@ -8,7 +8,7 @@ require "rails_helper"
 # without ever skipping an audit of state nothing has covered.
 RSpec.describe "Axe audit memo", type: :system do
   it "audits once per page state and re-audits on any change" do
-    visit root_path
+    visit new_session_path
 
     expect(axe_clean?).to be(true)
     baseline = axe_audit_run_count
@@ -29,7 +29,7 @@ RSpec.describe "Axe audit memo", type: :system do
   end
 
   it "never lets a memo hit mask a violation introduced after an audit" do
-    visit root_path
+    visit new_session_path
     expect(axe_clean?).to be(true)
 
     # An <img> with no alt is a bread-and-butter axe failure.

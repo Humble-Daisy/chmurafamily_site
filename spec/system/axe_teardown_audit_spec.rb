@@ -10,7 +10,7 @@ require "rails_helper"
 # covered in spec/lib/axe_teardown_gate_spec.rb.
 RSpec.describe "AAA teardown audit", type: :system do
   it "catches a planted violation in both themes, and is clean again once it is gone" do
-    visit root_path
+    visit new_session_path
     expect(axe_violations_in_both_themes).to be_empty
 
     page.execute_script(<<~JS)
@@ -27,7 +27,7 @@ RSpec.describe "AAA teardown audit", type: :system do
   end
 
   it "records this example as having navigated, so the suite gate holds it to an audit" do
-    visit root_path
+    visit new_session_path
 
     expect(AxeAccessibility::VISITED_EXAMPLES).to include(RSpec.current_example.id)
   end
@@ -36,7 +36,7 @@ RSpec.describe "AAA teardown audit", type: :system do
   # visit, the form for a submission, a frame for a frame load. The teardown
   # audit waits all of it out rather than auditing mid-flight.
   it "waits for an in-flight Turbo visit to settle before auditing" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       document.documentElement.setAttribute("aria-busy", "true");
       setTimeout(() => document.documentElement.removeAttribute("aria-busy"), 400);
@@ -47,7 +47,7 @@ RSpec.describe "AAA teardown audit", type: :system do
   end
 
   it "waits for an in-flight form submission too, the state a redirect visit starts from" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       const form = document.createElement("form");
       form.id = "axe-busy-form";
@@ -67,7 +67,7 @@ RSpec.describe "AAA teardown audit", type: :system do
   # moment handed axe a document mid-visit, which it reports as
   # aria-allowed-attr on <html>.
   it "keeps waiting when the page goes quiet and then busy again" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       const html = document.documentElement;
       window.__busyCycles = 0;
@@ -87,7 +87,7 @@ RSpec.describe "AAA teardown audit", type: :system do
   end
 
   it "gives up on work that never settles and lets the audit report it" do
-    visit root_path
+    visit new_session_path
     page.execute_script("document.documentElement.setAttribute('aria-busy', 'true')")
 
     expect(wait_for_turbo_to_settle(wait: 0.3)).to be(false)
