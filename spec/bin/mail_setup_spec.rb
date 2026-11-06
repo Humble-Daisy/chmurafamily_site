@@ -252,6 +252,16 @@ RSpec.describe MailSetup do
       expect(credentials.mailer_from).to eq("hi@acme.example")
     end
 
+    it "stays consistent across a run when another fork's key is exported" do
+      ENV["RAILS_MASTER_KEY"] = "b" * 32
+      changes = MailSetup::KeyDecision.decide(root: app.to_s, env: ENV)
+      run = described_class.new(root: app.to_s, env: changes)
+
+      expect(run.write_login(**login)).to be(true)
+      expect(app.join("config/credentials/production.key")).to exist
+      expect(run.login_matches?(**login)).to be(true)
+    end
+
     it "sees a missing login field" do
       raw_write(%(smtp:\n  user_name: "u"\n))
 
@@ -328,6 +338,84 @@ RSpec.describe MailSetup do
       expect(file.read).to eq("a: 1\n")
       expect(status.exitstatus).to eq(1)
       expect(out + err).not_to include("FAKESECRET")
+    end
+  end
+
+  describe MailSetup::KeyDecision do
+    let(:root) { Pathname.new(Dir.mktmpdir) }
+    let(:key_file) { root.join("config/credentials/production.key") }
+    let(:enc_file) { root.join("config/credentials/production.yml.enc") }
+    let(:no_history) { ->(_path) { false } }
+
+    before { FileUtils.mkdir_p(key_file.dirname) }
+    after { FileUtils.rm_rf(root) }
+
+    def decide(env: {}, history: no_history) = described_class.decide(root: root.to_s, env:, history:)
+
+    it "stops when the exported key differs from production.key, without printing either" do
+      key_file.write("a" * 32)
+      enc_file.write("x")
+
+      expect { decide(env: { "RAILS_MASTER_KEY" => "b" * 32 }) }.to raise_error(MailSetup::Stop) { |error|
+        expect(error.message).to include("unset RAILS_MASTER_KEY")
+        expect(error.message).not_to include("a" * 32, "b" * 32)
+      }
+    end
+
+    it "unsets an exported key when there's no credentials file yet" do
+      expect(decide(env: { "RAILS_MASTER_KEY" => "b" * 32 })).to eq("RAILS_MASTER_KEY" => nil)
+    end
+
+    it "uses an exported key when the file exists and there's no production.key" do
+      enc_file.write("x")
+
+      expect(decide(env: { "RAILS_MASTER_KEY" => "b" * 32 })).to eq({})
+    end
+
+    it "continues when the exported key matches production.key" do
+      key_file.write("#{"a" * 32}\n")
+      enc_file.write("x")
+
+      expect(decide(env: { "RAILS_MASTER_KEY" => "a" * 32 })).to eq({})
+    end
+
+    it "stops on a comma-separated key" do
+      expect { decide(env: { "RAILS_MASTER_KEY" => "#{"a" * 32},#{"b" * 32}" }) }
+        .to raise_error(MailSetup::Stop, /one key/)
+    end
+
+    it "stops when the file exists with no key at all, creating none" do
+      enc_file.write("x")
+
+      expect { decide }.to raise_error(MailSetup::Stop, /whoever set/)
+      expect(key_file).not_to exist
+    end
+
+    it "refuses when git history has a credentials file and the disk doesn't" do
+      expect { decide(history: ->(path) { path == MailSetup::ProductionCredentials::FILE }) }
+        .to raise_error(MailSetup::Stop, /git history/)
+    end
+
+    it "continues to a first run when there are no credentials anywhere" do
+      expect(decide).to eq({})
+    end
+
+    it "notices root credentials that a new production file would replace" do
+      root.join("config/credentials.yml.enc").write("x")
+
+      expect(described_class.replaces_root?(root: root.to_s)).to be(true)
+      enc_file.write("x")
+      expect(described_class.replaces_root?(root: root.to_s)).to be(false)
+    end
+
+    it "reads history through git, seeing a credentials file that was committed and removed" do
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "init", "-q", exception: true)
+      enc_file.write("x")
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "add", ".", exception: true)
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "x", exception: true)
+      enc_file.delete
+
+      expect { described_class.decide(root: root.to_s, env: {}) }.to raise_error(MailSetup::Stop, /git history/)
     end
   end
 end

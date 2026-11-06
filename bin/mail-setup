@@ -11,6 +11,9 @@ require "yaml"
 require_relative "../lib/clean_git_env"
 
 class MailSetup
+  # Its message is always a fixed sentence, safe to print.
+  class Stop < StandardError; end
+
   module CredentialsText
     def self.with_login(text, user_name:, password:)
       block = "smtp:\n  user_name: #{user_name.to_json}\n  password: #{password.to_json}\n"
@@ -190,6 +193,46 @@ class MailSetup
       @problem = :invalid_yaml
       {}
     end
+  end
+
+  module KeyDecision
+    KEY_FILE = "config/credentials/production.key"
+    ROOT_FILE = "config/credentials.yml.enc"
+    NEVER_REGENERATE = "Get the key from whoever set this fork up. Don't regenerate it: new encryption keys lose every email lookup."
+
+    def self.decide(root:, env: ENV, history: ->(path) { committed?(root, path) })
+      exported = env["RAILS_MASTER_KEY"].to_s.strip
+      raise Stop, "RAILS_MASTER_KEY holds a list, and Rails writes with one key. Set it to one key, or unset it." if exported.include?(",")
+
+      file_exists = File.exist?(File.join(root, ProductionCredentials::FILE))
+      return decide_for_existing(root, exported) if file_exists
+      raise Stop, "#{ProductionCredentials::FILE} is missing here, but git history has one. Restore it rather than creating a rival. #{NEVER_REGENERATE}" if history.call(ProductionCredentials::FILE)
+
+      exported.empty? ? {} : { "RAILS_MASTER_KEY" => nil }
+    end
+
+    def self.replaces_root?(root:)
+      File.exist?(File.join(root, ROOT_FILE)) && !File.exist?(File.join(root, ProductionCredentials::FILE))
+    end
+
+    def self.decide_for_existing(root, exported)
+      key_path = File.join(root, KEY_FILE)
+      unless File.exist?(key_path)
+        return {} unless exported.empty?
+
+        raise Stop, "#{KEY_FILE} is missing, so #{ProductionCredentials::FILE} can't be read. #{NEVER_REGENERATE}"
+      end
+      return {} if exported.empty? || exported == File.read(key_path).strip
+
+      raise Stop, "RAILS_MASTER_KEY in this shell doesn't match #{KEY_FILE}. If the file is the right one, run `unset RAILS_MASTER_KEY` and try again."
+    end
+    private_class_method :decide_for_existing
+
+    def self.committed?(root, path)
+      out, = Open3.capture2(CleanGitEnv::HASH, "git", "-C", root, "log", "--all", "--oneline", "-1", "--", path, err: File::NULL)
+      !out.strip.empty?
+    end
+    private_class_method :committed?
   end
 end
 
