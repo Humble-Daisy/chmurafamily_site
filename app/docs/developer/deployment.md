@@ -223,6 +223,12 @@ the box through Action Mailer, so a deployment with no mail server boots,
 reports healthy at `/up`, and nobody can sign in. The preflight guard refuses
 that boot, which is why this step sits before the first deploy.
 
+**The quick way:** run `bin/mail-setup`. It asks for your provider and login,
+writes them to the production credentials and `config/deploy.yml`, and closes by
+saying what to commit, what production still refuses and how to prove delivery.
+Run it again to swap providers or replace a login. The recipes below are the same
+steps by hand.
+
 Mail leaves over SMTP. Where it goes comes from the environment and how it
 signs in comes from the credentials, which keep every app-runtime secret.
 Every provider named below speaks SMTP, so moving between them is a change of
@@ -287,6 +293,12 @@ settings; the differences are where the values come from.
    SMTP_PORT: 587
    ```
 
+#### Any other SMTP server
+
+Set `SMTP_ADDRESS` and `SMTP_PORT`, and put the login in the credentials as above.
+The app always signs in with `:plain` over STARTTLS. Port 465, which uses implicit
+TLS, and a relay that takes no login both need a change to `lib/mail_delivery.rb`.
+
 #### Domain authentication, whichever provider
 
 Send from a subdomain you reserve for the app's mail (`mail.yourdomain.com`),
@@ -313,9 +325,20 @@ campaign should never cost a sign-in link its reputation.
   exceed the hours it takes to run one. Deliverability — IP reputation,
   warm-up, blocklists — is the cost that moves from the provider to you.
 
-To check a deployment: request a magic link for your own address and read the
-mail. If nothing arrives, `kamal app logs` shows the failed job with the
+To check a deployment: request a magic link for an account that exists and read
+the mail. With invite-only sign-up, an address with no account gets the normal page
+and no email, so create your account first
+([Day one](operations#day-one-on-an-invite-only-instance)) and test other addresses
+by inviting them. If nothing arrives, `kamal app logs` shows the failed job with the
 provider's response.
+
+#### Open sign-up
+
+`SIGNUP_MODE: open` under `env.clear` lets anyone register, so the app sends mail to
+any address it's given. The template limits requests per IP and per recipient, but
+has no daily ceiling and no bot check, so a wave of signups across many addresses
+can reach your provider's complaint limits. Add those before opening sign-up on an
+app whose provider account you share with other apps.
 
 #### Separating kinds of mail later
 

@@ -80,6 +80,9 @@ env:
     # OBJECT_STORAGE_BUCKET: yourapp-backups   # or a bucket, its key in credentials (object_storage.*)
     # OBJECT_STORAGE_REGION: eu-central-003
 
+    # SIGNUP_MODE: open   # default: invite_only. Read Open sign-up in /docs/developer/deployment first
+    # WORKSPACE_ON_SIGNUP: shared   # must match the preset bin/fork set
+
     # Outbound mail: the server here, its login in credentials (smtp.user_name, smtp.password).
     # Production refuses to boot without both. Recipes: /docs/developer/deployment.
     SMTP_ADDRESS: smtp.postmarkapp.com

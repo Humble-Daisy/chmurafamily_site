@@ -116,6 +116,8 @@ sign-in options and [Application Flows](/docs/developer/application-flows) for t
 
 ### SMTP Setup
 
+Run `bin/mail-setup` to configure this, or set it by hand.
+
 Where mail goes comes from the environment (`SMTP_ADDRESS`, `SMTP_PORT`,
 `SMTP_DOMAIN`); the login lives in the per-environment credentials:
 

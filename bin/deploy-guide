@@ -24,13 +24,16 @@ GUIDES = {
        your server's IP or hostname, and proxy.host.
     3. Generate production credentials (bin/rails credentials:edit --environment
        production); .kamal/secrets takes RAILS_MASTER_KEY from the environment,
-       else reads config/credentials/production.key.
-    4. Outbound mail: sign-in is an email, and the app refuses to boot without
-       it. deploy.yml already points SMTP_ADDRESS at Postmark; put the login in
-       the production credentials as smtp.user_name and smtp.password (for
-       Postmark, both are the Server API token). Other providers: "Configure
-       outbound mail" in /docs/developer/deployment.
-    5. First deploy: bin/kamal setup. After that: bin/kamal deploy.
+       else reads config/credentials/production.key. Paste the block from
+       bin/rails db:encryption:init into them, once: the app refuses to boot
+       without those keys.
+    4. Set RAILS_HOST under env.clear in config/deploy.yml. The app refuses to
+       boot on a placeholder.
+    5. Outbound mail: sign-in is an email, and the app refuses to boot without
+       it. Run bin/mail-setup, which writes smtp.user_name and smtp.password to
+       the production credentials and SMTP_ADDRESS to deploy.yml. By hand:
+       "Configure outbound mail" in /docs/developer/deployment.
+    6. First deploy: bin/kamal setup. After that: bin/kamal deploy.
 
     Keep servers.web at exactly one host and SOLID_QUEUE_IN_PUMA: true until
     you graduate off SQLite — the deploy.yml comments explain the checklist.

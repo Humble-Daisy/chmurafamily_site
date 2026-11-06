@@ -45,6 +45,11 @@ your `SIGNUP_MODE`:
   bin/rails runner 'User.create!(email_address: "me@example.com", first_name: "Me", last_name: "Operator")'
   ```
 
+These commands run wherever the database is. On a Kamal deploy, `bin/rails` on
+your laptop reaches your development database, and production would still have no
+account. Use `bin/kamal console` for the `User.create!` line, and
+`bin/kamal app exec --reuse "bin/rails 'operators:grant[me@example.com]'"` for the tasks.
+
 Either way, then:
 
 ```sh
