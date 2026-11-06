@@ -14,7 +14,7 @@ require "rails_helper"
 # the project rule "system specs test real rendered HTML" does not apply.
 RSpec.describe "axe gate rule coverage", type: :system do
   it "selects the full A/AA/AAA rule stack, not just AAA-tagged rules" do
-    visit root_path
+    visit new_session_path
     inject_axe
 
     rule_ids = page.evaluate_script(
@@ -37,7 +37,7 @@ RSpec.describe "axe gate rule coverage", type: :system do
   # very spec green the entire time. A guard that tests the default while the
   # callers bypass the default is not a guard.
   it "cannot be narrowed below the cumulative stack by a caller-supplied runOnly" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       document.body.insertAdjacentHTML(
         "beforeend", '<input id="a11y-narrowing-probe" type="text">'
@@ -56,7 +56,7 @@ RSpec.describe "axe gate rule coverage", type: :system do
   end
 
   it "catches a seeded unlabeled input under the gate's default options" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       document.body.insertAdjacentHTML(
         "beforeend", '<input id="a11y-gate-probe" type="text">'
@@ -70,5 +70,22 @@ RSpec.describe "axe gate rule coverage", type: :system do
     # The CI after-hook re-audits the page (both themes), so the deliberately
     # broken probe must not leak into it.
     page.execute_script('document.getElementById("a11y-gate-probe")?.remove()')
+  end
+
+  # The open cookie banner is a role="dialog", so axe defers this rule instead of failing it (#1549).
+  it "fails a focusable aria-hidden control even when axe defers the rule for an open dialog" do
+    visit new_session_path
+    expect(page).to have_css(".biscuit-banner")
+    page.execute_script(<<~JS)
+      document.querySelector("main").insertAdjacentHTML(
+        "beforeend", '<button id="a11y-hidden-focus-probe" aria-hidden="true">Probe</button>'
+      )
+    JS
+
+    results = run_axe_audit(exclude: [], include: "#a11y-hidden-focus-probe")
+
+    expect(results["violations"].map { |v| v["id"] }).to include("aria-hidden-focus")
+  ensure
+    page.execute_script('document.getElementById("a11y-hidden-focus-probe")?.remove()')
   end
 end

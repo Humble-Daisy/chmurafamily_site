@@ -1,0 +1,2 @@
+- nokogiri 1.19.7, loofah 2.25.3 and rails-html-sanitizer 1.7.2 close eleven advisories bundler-audit reported on 2026-11-03, among them mutation XSS and sanitizer bypasses, so bundler-audit passes again.
+- The forking guide says to turn on Dependabot alerts and security updates in a new fork, and how to clear a red bundler-audit between syncs.

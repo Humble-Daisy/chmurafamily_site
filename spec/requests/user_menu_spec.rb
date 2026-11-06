@@ -6,29 +6,29 @@ RSpec.describe "User menu", type: :request do
     before { sign_in(user) }
 
     it "renders the user menu trigger with avatar initials" do
-      get root_path
+      get workspaces_path
       expect(response.body).to include("JD")
       expect(response.body).to include('aria-haspopup="menu"')
     end
 
     it "includes a profile link in the user menu" do
-      get root_path
+      get workspaces_path
       expect(response.body).to include(edit_settings_profile_path)
     end
 
     it "includes a sign out form in the user menu" do
-      get root_path
+      get workspaces_path
       expect(response.body).to include('action="/session"')
     end
 
     it "displays user name and email in the menu" do
-      get root_path
+      get workspaces_path
       expect(response.body).to include(CGI.escapeHTML(user.full_name))
       expect(response.body).to include(CGI.escapeHTML(user.email_address))
     end
 
     it "does not render inline sign-out link in desktop nav" do
-      get root_path
+      get workspaces_path
       doc = Nokogiri::HTML(response.body)
       desktop_nav = doc.at_css(".hidden.md\\:flex")
       sign_out_buttons = desktop_nav.css('input[value="' + I18n.t("navigation.sign_out") + '"]')
@@ -38,7 +38,7 @@ RSpec.describe "User menu", type: :request do
 
   describe "unauthenticated user" do
     it "shows sign in link instead of user menu" do
-      get root_path
+      get new_session_path
       expect(response.body).to include(I18n.t("navigation.sign_in"))
       expect(response.body).not_to include('id="user-menu"')
     end
@@ -49,7 +49,7 @@ RSpec.describe "User menu", type: :request do
     before { sign_in(user) }
 
     it "renders a Notifications link inside the desktop user menu wrapped in notifications_menu_count_frame" do
-      get root_path
+      get workspaces_path
       doc = Nokogiri::HTML(response.body)
       desktop_menu = doc.at_css('#user-menu')
       expect(desktop_menu).not_to be_nil
@@ -64,7 +64,7 @@ RSpec.describe "User menu", type: :request do
     end
 
     it "positions the Notifications row between the identity block and All workspaces" do
-      get root_path
+      get workspaces_path
       doc = Nokogiri::HTML(response.body)
       menu = doc.at_css('#user-menu')
 
@@ -88,7 +88,7 @@ RSpec.describe "User menu", type: :request do
 
     it "renders an aria-live count badge inside the Notifications row when unread is present" do
       PasswordChangedNotifier.with(record: user).deliver(user)
-      get root_path
+      get workspaces_path
       doc = Nokogiri::HTML(response.body)
       frame = doc.at_css('turbo-frame#notifications_menu_count_frame')
       badge = frame.at_css("[aria-live='polite']")
@@ -100,14 +100,14 @@ RSpec.describe "User menu", type: :request do
     it "omits the count badge when there are no unread notifications" do
       # sign_in fires SignInFromNewDeviceNotifier; clear so this case is truly empty.
       user.notifications.destroy_all
-      get root_path
+      get workspaces_path
       doc = Nokogiri::HTML(response.body)
       frame = doc.at_css('turbo-frame#notifications_menu_count_frame')
       expect(frame.at_css("[aria-live='polite']")).to be_nil
     end
 
     it "renders the Notifications row inside the mobile menu panel" do
-      get root_path
+      get workspaces_path
       doc = Nokogiri::HTML(response.body)
       mobile_panel = doc.at_css('#mobile-menu-panel')
       expect(mobile_panel).not_to be_nil

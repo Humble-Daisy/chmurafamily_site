@@ -60,7 +60,7 @@ RSpec.describe "Header chrome", type: :system do
   def wordmark = "header a[href='#{root_path}'] span"
 
   it "lets a brand stylesheet that loads before the app's set the chrome" do
-    visit root_path
+    visit new_session_path
     page.execute_script(<<~JS)
       var brand = document.createElement("style");
       brand.textContent = ":root { --color-chrome: oklch(35% 0.12 150); " +
@@ -77,7 +77,7 @@ RSpec.describe "Header chrome", type: :system do
   end
 
   it "keeps today's header with the chrome family at its defaults" do
-    visit root_path
+    visit new_session_path
     unbrand_the_chrome
 
     expect(computed("header", "backgroundColor")).to eq(resolved("--color-surface-raised"))
@@ -88,7 +88,7 @@ RSpec.describe "Header chrome", type: :system do
   end
 
   it "paints the bar from the chrome tokens once a brand sets them" do
-    visit root_path
+    visit new_session_path
     brand_the_chrome
 
     expect(computed("header", "backgroundColor")).to eq(resolved("--color-chrome"))
@@ -100,7 +100,7 @@ RSpec.describe "Header chrome", type: :system do
   end
 
   it "leaves the account menu on its own surface under a branded bar" do
-    visit root_path
+    visit new_session_path
     brand_the_chrome
     find("#user-menu-button").click
 
@@ -110,7 +110,7 @@ RSpec.describe "Header chrome", type: :system do
   end
 
   it "rings the bar's controls in the chrome focus color" do
-    visit root_path
+    visit new_session_path
     brand_the_chrome
     cdp_execute("document.activeElement && document.activeElement.blur()")
     reached = (1..15).any? do
@@ -124,7 +124,7 @@ RSpec.describe "Header chrome", type: :system do
 
   it "keeps the mobile menu panel on its own surface under a branded bar" do
     page.current_window.resize_to(390, 900)
-    visit root_path
+    visit new_session_path
     brand_the_chrome
     find("header button[aria-controls='mobile-menu-panel']").click
 
@@ -133,7 +133,7 @@ RSpec.describe "Header chrome", type: :system do
   end
 
   it "stays AAA in both themes once a brand sets the chrome" do
-    visit root_path
+    visit new_session_path
     brand_the_chrome
 
     expect_aaa_in_both_themes(include: "header")
@@ -141,7 +141,7 @@ RSpec.describe "Header chrome", type: :system do
 
   it "keeps the signed-out bar AAA once a brand sets the chrome" do
     Capybara.reset_session!
-    visit root_path
+    visit new_session_path
     brand_the_chrome
 
     expect(page).to have_link(I18n.t("navigation.sign_in"), href: new_session_path)

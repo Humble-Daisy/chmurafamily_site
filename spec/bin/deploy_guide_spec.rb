@@ -29,6 +29,14 @@ RSpec.describe "bin/deploy-guide" do
     end
   end
 
+  describe "kamal target's production requirements" do
+    it "leads mail with bin/mail-setup, and names the other things production refuses without" do
+      stdout, = run_guide("kamal")
+
+      expect(stdout).to include("bin/mail-setup", "RAILS_HOST", "db:encryption:init")
+    end
+  end
+
   describe "self-host target" do
     it "covers host prerequisites on top of the Kamal docs" do
       stdout, _stderr, status = run_guide("self-host")
@@ -87,7 +95,7 @@ RSpec.describe "bin/deploy-guide" do
     it "only points at doc sections that exist" do
       deployment_doc = File.read(File.join(app_root, "app", "docs", "developer", "deployment.md"))
 
-      expect(deployment_doc).to include("## Deploying without Kamal", "### 3. Configure outbound mail")
+      expect(deployment_doc).to include("## Deploying without Kamal", "### 4. Configure outbound mail")
     end
   end
 end

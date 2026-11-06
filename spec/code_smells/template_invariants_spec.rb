@@ -961,11 +961,13 @@ RSpec.describe "Template invariants" do
 
       queues_value = workers.first["queues"]
       expect(queues_value).to be_an(Array),
-        "expected queues to be an explicit array (e.g., [default, mailers, low]) instead of " \
+        "expected queues to be an explicit array (e.g., [mailers, default, low]) instead of " \
         "the \"*\" wildcard — named queues give clear operational signals when one backs up. " \
         "Got: #{queues_value.inspect}"
       expect(queues_value).to include("mailers"),
         "expected `mailers` queue declared explicitly so mailer jobs are routable separately"
+      expect(queues_value.first).to eq("mailers"),
+        "expected `mailers` first so a sign-in link is claimed ahead of backups and sweeps"
     end
 
     it "recurring.yml routes digest_mailer to the mailers queue" do
@@ -1254,6 +1256,36 @@ RSpec.describe "Template invariants" do
     end
   end
 
+  describe "where a fork finds its mail and sign-up settings" do
+    it "points the Dev Container's next steps at bin/deploy-guide" do
+      expect(File.read(root.join(".devcontainer/setup.sh"))).to include("bin/deploy-guide")
+    end
+
+    # Directly after MAIL_FROM these lines would conflict with a fork's mail edits on sync.
+    it "keeps the commented sign-up lines above the outbound mail comment" do
+      deploy = File.read(root.join("config/deploy.yml"))
+      skip "fork — a fork may have rewritten config/deploy.yml" if root.join(".fork.yml").exist?
+
+      mail = deploy.index("# Outbound mail:")
+      expect(deploy.index("# SIGNUP_MODE: open")).to be < mail
+      expect(deploy.index("# WORKSPACE_ON_SIGNUP:")).to be < mail
+      expect(deploy.index("# TENANCY_SHARED_WORKSPACE_SLUG:")).to be < mail
+    end
+
+    it "doesn't send .env.example readers to a removed route" do
+      expect(File.read(root.join(".env.example"))).not_to include("/registrations/new")
+    end
+  end
+
+  describe "bin/mail-setup can edit the shipped deploy.yml" do
+    it "finds SMTP_ADDRESS under env.clear" do
+      skip "fork — a fork may have rewritten config/deploy.yml" if root.join(".fork.yml").exist?
+      load root.join("bin/mail-setup")
+
+      expect(MailSetup::DeployFile.editable?(File.read(root.join("config/deploy.yml")))).to be(true)
+    end
+  end
+
   # bin scripts in this repo are spec'd by `load`ing them (see
   # spec/bin/parallel_rspec_spec.rb), which only works because the top-level
   # invocation is guarded. Without the guard, loading a script in a spec RUNS
@@ -1261,7 +1293,7 @@ RSpec.describe "Template invariants" do
   # `git remote rename` and a commit. Asserted on source because the safe way
   # to test "loading is safe" cannot itself be to load it.
   describe "bin scripts are safe to load in a spec" do
-    %w[bin/fork bin/parallel-rspec].each do |script|
+    %w[bin/fork bin/mail-setup bin/parallel-rspec].each do |script|
       it "#{script} guards top-level execution behind $PROGRAM_NAME" do
         source = File.read(root.join(script))
 
@@ -1491,6 +1523,8 @@ RSpec.describe "Template invariants" do
       %w[
         app/views/pages/**
         app/controllers/pages_controller.rb
+        spec/system/pages/**
+        spec/requests/pages_spec.rb
         config/locales/en/pages.en.yml
         config/locales/en/brand.en.yml
         config/routes/app.rb

@@ -14,22 +14,9 @@ require "rails_helper"
 RSpec.describe "User menu dropdown", type: :system do
   let(:user) { create(:user, first_name: "Jane", last_name: "Doe") }
 
-  # Invoke a keyboard event on the menu controller directly. Programmatic
-  # KeyboardEvent dispatch does not reliably reach Stimulus listeners through
-  # the driver's isolated evaluation context, so we call the handler directly.
-  def send_dropdown_key(key)
-    cdp_execute(<<~JS)
-      (function() {
-        var el = document.querySelector('[data-controller~="menu"]');
-        var c = window.Stimulus.getControllerForElementAndIdentifier(el, 'menu');
-        if (c) c.navigate(new KeyboardEvent('keydown', { key: '#{key}', bubbles: true }));
-      })()
-    JS
-  end
-
   before do
     sign_in_via_form(user)
-    visit root_path # this file's old helper copy baked this in; the examples assume it
+    visit new_session_path # this file's old helper copy baked this in; the examples assume it
   end
 
   # #685: the user menu runs on the menu-pattern controller (APG menu-button),
@@ -37,21 +24,11 @@ RSpec.describe "User menu dropdown", type: :system do
   # leaves focus where the user clicked instead of yanking it to the trigger
   # (WCAG 3.2.1/2.4.3).
   describe "menu-pattern behaviors (#685)" do
-    def send_menu_key(key)
-      cdp_execute(<<~JS)
-        (function() {
-          var el = document.querySelector('[data-controller~="menu"]');
-          var c = window.Stimulus.getControllerForElementAndIdentifier(el, 'menu');
-          if (c) c.navigate(new KeyboardEvent('keydown', { key: '#{key}', bubbles: true }));
-        })()
-      JS
-    end
-
     it "type-ahead focuses the item matching typed characters" do
       find("#user-menu-button").click
       expect(page).to have_css("#user-menu", visible: :visible)
 
-      send_menu_key("s")
+      cdp_press("s")
 
       focused = page.evaluate_script("document.activeElement.textContent.trim()")
       expect(focused).to eq(I18n.t("navigation.sign_out"))
@@ -86,7 +63,7 @@ RSpec.describe "User menu dropdown", type: :system do
     it "closes on Escape key" do
       find("#user-menu-button").click
       expect(page).to have_css("#user-menu", visible: :visible)
-      send_dropdown_key("Escape")
+      cdp_press("Escape")
       expect(page).to have_no_css("#user-menu", visible: :visible)
     end
   end
@@ -152,56 +129,59 @@ RSpec.describe "User menu dropdown", type: :system do
     end
 
     it "ArrowDown moves focus from identity to Notifications (second item, v2)" do
-      send_dropdown_key("ArrowDown")
+      cdp_press("ArrowDown")
       focused_href = page.evaluate_script("document.activeElement?.getAttribute('href')")
       expect(focused_href).to eq(settings_notifications_path)
     end
 
     it "ArrowDown twice moves focus to All workspaces (third item)" do
-      send_dropdown_key("ArrowDown") # identity → Notifications
-      send_dropdown_key("ArrowDown") # Notifications → All workspaces
+      cdp_press("ArrowDown") # identity → Notifications
+      cdp_press("ArrowDown") # Notifications → All workspaces
       focused_href = page.evaluate_script("document.activeElement?.getAttribute('href')")
       expect(focused_href).to eq(workspaces_path)
     end
 
     it "ArrowDown thrice moves focus to sign-out (fourth and final item)" do
-      send_dropdown_key("ArrowDown")
-      send_dropdown_key("ArrowDown")
-      send_dropdown_key("ArrowDown") # All workspaces → sign-out
+      cdp_press("ArrowDown")
+      cdp_press("ArrowDown")
+      cdp_press("ArrowDown") # All workspaces → sign-out
       focused_text = page.evaluate_script("document.activeElement?.textContent?.trim()")
       expect(focused_text).to eq(I18n.t("navigation.sign_out"))
     end
 
+    # Focus opens on the first item, so tests that should land there start from the last.
+    def focus_last_item
+      find("#user-menu button", text: I18n.t("navigation.sign_out")).execute_script("this.focus()")
+    end
+
     it "ArrowDown wraps from last to first item" do
-      send_dropdown_key("ArrowDown") # identity → Notifications
-      send_dropdown_key("ArrowDown") # Notifications → All workspaces
-      send_dropdown_key("ArrowDown") # All workspaces → sign-out
-      send_dropdown_key("ArrowDown") # sign-out → wraps to identity
+      focus_last_item
+      cdp_press("ArrowDown")
       focused_href = page.evaluate_script("document.activeElement?.getAttribute('href')")
       expect(focused_href).to eq(edit_settings_profile_path)
     end
 
     it "ArrowUp wraps from first to last item" do
-      send_dropdown_key("ArrowUp")
+      cdp_press("ArrowUp")
       focused_text = page.evaluate_script("document.activeElement?.textContent?.trim()")
       expect(focused_text).to eq(I18n.t("navigation.sign_out"))
     end
 
     it "Home key focuses first item" do
-      send_dropdown_key("ArrowDown")
-      send_dropdown_key("Home")
+      focus_last_item
+      cdp_press("Home")
       focused_href = page.evaluate_script("document.activeElement?.getAttribute('href')")
       expect(focused_href).to eq(edit_settings_profile_path)
     end
 
     it "End key focuses last item" do
-      send_dropdown_key("End")
+      cdp_press("End")
       focused_text = page.evaluate_script("document.activeElement?.textContent?.trim()")
       expect(focused_text).to eq(I18n.t("navigation.sign_out"))
     end
 
     it "returns focus to trigger button on Escape" do
-      send_dropdown_key("Escape")
+      cdp_press("Escape")
       focused_id = page.evaluate_script("document.activeElement?.id")
       expect(focused_id).to eq("user-menu-button")
     end
@@ -288,7 +268,7 @@ RSpec.describe "User menu dropdown", type: :system do
   describe "unauthenticated" do
     it "shows sign in link instead of avatar" do
       Capybara.reset_sessions!
-      visit root_path
+      visit new_session_path
       expect(page).to have_link(I18n.t("navigation.sign_in"))
       expect(page).to have_no_css("#user-menu-button", visible: :visible)
     end

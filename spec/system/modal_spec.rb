@@ -2,7 +2,7 @@ require "rails_helper"
 
 RSpec.describe "Modal system", type: :system do
   before do
-    visit root_path
+    visit new_session_path
     # Dismiss the cookie consent banner if present so it doesn't intercept pointer events
     page.execute_script(<<~JS)
       const banner = document.querySelector('[data-biscuit-target="banner"]');
@@ -79,6 +79,19 @@ RSpec.describe "Modal system", type: :system do
       focused_id = page.evaluate_script("document.activeElement?.id")
       expect(focused_id).to eq("test-modal-trigger")
     end
+
+    it "moves focus to the main region when the opener left the page while it was open" do
+      page.execute_script("document.getElementById('test-modal-trigger').remove()")
+      click_button "Close"
+      expect(page).to have_no_css("dialog[open]")
+      expect(page.evaluate_script("document.activeElement?.id")).to eq("main-content")
+    end
+
+    it "moves focus to the main region when the dialog is torn out of the page while open" do
+      page.execute_script("document.getElementById('test-modal').closest('[data-controller~=\"modal\"]').remove()")
+      expect(page).to have_no_css("#test-modal", visible: :all)
+      expect(page.evaluate_script("document.activeElement?.id")).to eq("main-content")
+    end
   end
 
   describe "accessibility" do
@@ -150,17 +163,17 @@ RSpec.describe "Modal system", type: :system do
       page.execute_script(<<~JS)
         const link = document.createElement('a');
         link.id = 'test-modal-away';
-        link.href = '#{page_path(:about)}';
+        link.href = '/docs';
         link.textContent = 'Leave via Turbo';
         link.setAttribute('style', 'display:inline-flex;min-width:44px;min-height:44px;align-items:center');
         document.querySelector('[data-modal-target="panel"]').appendChild(link);
       JS
       click_link "Leave via Turbo"
-      expect(page).to have_current_path(page_path(:about))
+      expect(page).to have_current_path("/docs")
 
       page.go_back
 
-      expect(page).to have_current_path(root_path)
+      expect(page).to have_current_path(new_session_path)
       expect(page).to have_css("#test-modal", visible: :all)
       expect(page).to have_no_css("dialog[open]")
       expect(page).to have_no_css('[aria-modal="true"]')
@@ -194,7 +207,7 @@ RSpec.describe "Modal system", type: :system do
       page.execute_script(<<~JS)
         const link = document.createElement('a');
         link.id = 'test-modal-away';
-        link.href = '#{page_path(:about)}';
+        link.href = '/docs';
         link.textContent = 'Leave via Turbo';
         link.setAttribute('style', 'display:inline-flex;min-width:44px;min-height:44px;align-items:center');
         document.querySelector('[data-modal-target="panel"]').appendChild(link);
@@ -210,11 +223,11 @@ RSpec.describe "Modal system", type: :system do
       expect(stripped).to be_positive
 
       click_link "Leave via Turbo"
-      expect(page).to have_current_path(page_path(:about))
+      expect(page).to have_current_path("/docs")
 
       page.go_back
 
-      expect(page).to have_current_path(root_path)
+      expect(page).to have_current_path(new_session_path)
       expect(page).to have_css("#test-modal", visible: :all)
       expect(page).to have_no_css("dialog[open]")
       expect(page).to have_no_css('[aria-modal="true"]')
@@ -223,7 +236,7 @@ RSpec.describe "Modal system", type: :system do
       # (by design, #912), and it would otherwise audit the stylesheet-less document
       # this example deliberately created — reporting target-size failures that are an
       # artifact of the setup, not of the UI.
-      visit root_path
+      visit new_session_path
       expect(page).to have_css("head link[rel='stylesheet']", visible: :all)
     end
   end

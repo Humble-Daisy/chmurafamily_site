@@ -19,7 +19,7 @@ RSpec.describe "Shared header — mobile menu auto-close", type: :system, js: tr
   end
 
   it "wires closeOnLinkClick on the menu panel and dismisses on link tap" do
-    visit root_path
+    visit new_session_path
 
     # The menu element should declare the auto-close action so any anchor
     # inside it dismisses the panel via event bubbling — no per-link wiring.
@@ -48,8 +48,19 @@ RSpec.describe "Shared header — mobile menu auto-close", type: :system, js: tr
     expect(has_hidden_class).to be(true)
   end
 
+  it "closes on Escape and hands focus back to the menu button" do
+    visit new_session_path
+    find("[data-mobile-menu-target='button']").click
+    expect(page).to have_css("[data-mobile-menu-target='menu']:not(.hidden)")
+
+    cdp_press("Escape")
+
+    expect(page).to have_css("[data-mobile-menu-target='menu'].hidden", visible: :all)
+    expect(page).to have_css("[data-mobile-menu-target='button'][aria-expanded='false']:focus")
+  end
+
   it "closes the panel when the user clicks anywhere outside the header" do
-    visit root_path
+    visit new_session_path
 
     # The header element declares a window-level click handler so taps
     # outside the header dismiss the panel — the classic click-outside-
@@ -78,7 +89,7 @@ RSpec.describe "Shared header — mobile menu auto-close", type: :system, js: tr
   end
 
   it "does NOT close when the click is INSIDE the header (e.g., user adjusting theme)" do
-    visit root_path
+    visit new_session_path
 
     find("[data-mobile-menu-target='button']").click
     expect(page).to have_css("[data-mobile-menu-target='menu']:not(.hidden)")

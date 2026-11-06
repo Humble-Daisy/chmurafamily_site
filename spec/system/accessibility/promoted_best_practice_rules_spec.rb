@@ -12,7 +12,7 @@ require "rails_helper"
 # the obvious "fix" for a future preview-host finding is to widen the promoted
 # list, which is exactly the burial the panel warned about.
 RSpec.describe "Promoted best-practice axe rules", type: :system do
-  before { visit root_path }
+  before { visit new_session_path }
 
   it "blocks a duplicate main landmark" do
     expect(axe_clean?).to be(true)
@@ -32,10 +32,8 @@ RSpec.describe "Promoted best-practice axe rules", type: :system do
   it "does not block an unpromoted best-practice rule" do
     expect(axe_clean?).to be(true)
 
-    # page-has-heading-one: a page with no h1 at all. It is a best-practice
-    # rule the sweep found only on preview hosts, so it must stay advisory —
-    # if this example goes red, the promoted list has been widened past the
-    # evidence.
+    # page-has-heading-one fires on every preview host, so it stays advisory; red here means the list was widened.
+    # A heading-less app page still fails the gate's own page-scoped mc-one-h1, which is not this rule.
     page.execute_script(<<~JS)
       document.querySelectorAll("h1").forEach(h => {
         const div = document.createElement("div");
@@ -45,10 +43,10 @@ RSpec.describe "Promoted best-practice axe rules", type: :system do
     JS
 
     expect(page).to have_no_css("h1", wait: 0)
-    expect(axe_clean?).to be(true)
+    expect(run_axe_audit.fetch("violations").map { |v| v["id"] }).not_to include("page-has-heading-one")
 
     # Restore a real page for the teardown audit rather than leaving it a
     # heading-stripped mutant.
-    visit root_path
+    visit new_session_path
   end
 end

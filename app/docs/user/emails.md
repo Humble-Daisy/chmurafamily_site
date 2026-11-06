@@ -116,6 +116,8 @@ sign-in options and [Application Flows](/docs/developer/application-flows) for t
 
 ### SMTP Setup
 
+For production, run `bin/mail-setup`, or set this by hand.
+
 Where mail goes comes from the environment (`SMTP_ADDRESS`, `SMTP_PORT`,
 `SMTP_DOMAIN`); the login lives in the per-environment credentials:
 
@@ -128,7 +130,7 @@ smtp:
 
 `lib/mail_delivery.rb` builds `config.action_mailer.smtp_settings` from both,
 and production refuses to boot when either is missing. Provider recipes:
-[Deployment](/docs/developer/deployment#3-configure-outbound-mail).
+[Deployment](/docs/developer/deployment#4-configure-outbound-mail).
 
 ### Default URL Host
 

@@ -161,9 +161,8 @@ bin/setup
 remote (push disabled), activates the merge driver, and writes the fork's
 recorded tenancy preset into their `.env`. Those three things are per-clone, not
 per-fork, which is why they live in setup rather than in the one-time script.
-The git hooks are not among them: `bundle exec lefthook install` is a separate
-one-time step per clone (see [Getting started](getting-started#gate-1-local-lefthook-pre-push)),
-and until it runs a push runs nothing.
+It also installs the git hooks (see [Getting started](getting-started#gate-1-local-lefthook-pre-push));
+a clone that skipped `bin/setup` checks nothing until CI does.
 
 > Teammates need **read access to the upstream template repository** for the
 > remote to be useful. If your template is private, grant it before they try to
@@ -222,9 +221,14 @@ bin/rails credentials:edit --environment development
 bin/rails credentials:edit --environment production
 ```
 
+`bin/mail-setup` handles the mail half of this: it creates the production credentials if
+they don't exist, adds the provider's login, and updates `config/deploy.yml`.
+
 Add OAuth keys and `mailer.from` (structure in [Getting Started](/docs/developer/getting-started)),
 and to production the mail provider's login as `smtp.user_name` and `smtp.password`
-([Deployment](/docs/developer/deployment#3-configure-outbound-mail)).
+([Deployment](/docs/developer/deployment#4-configure-outbound-mail)) and, once
+backups go to a bucket, its key as `object_storage.access_key_id` and
+`object_storage.secret_access_key` ([Deployment](/docs/developer/deployment#move-to-a-bucket-when-the-data-matters)).
 Commit your `.yml.enc` files; the `.key` files stay gitignored. Kamal builds the
 image from a clone of the commit, so an uncommitted credentials file never
 reaches production, and the app refuses to boot without it. `.kamal/secrets`
@@ -289,6 +293,12 @@ place. It names any other ruleset on the repo, which you reconcile by hand.
   `main`.
 - **Plan limits.** GitHub Free applies rulesets to public repositories only. On
   a private one the script reports each refused ruleset and exits non-zero.
+- **Turn on Dependabot alerts and security updates** in the repository's
+  security settings. A repository made with GitHub's Fork button starts with
+  both off, so `.github/dependabot.yml` alone opens no PRs.
+- **When bundler-audit goes red between syncs**, a new advisory has landed
+  against a gem you already have. Bump only the gems it names:
+  `bundle update --conservative <gem> <gem>`, then rerun `bin/bundler-audit`.
 
 Cutting, reviewing and shipping a release, hotfixes, and the merge-back are in
 [Releasing](releasing). To change the flow, edit the JSON files, or replace the
@@ -304,7 +314,8 @@ on every sync.
 | ---- | --------------- |
 | `config/locales/en/brand.en.yml` | Product name, description, copyright |
 | `config/locales/en/pages.en.yml` | Marketing copy for your pages |
-| `app/views/pages/**`, `app/controllers/pages_controller.rb` | Your marketing/static pages |
+| `app/views/pages/**`, `app/controllers/pages_controller.rb` | Your marketing/static pages. A layout of your own for them must render `shared/toasts`: email verification lands on `/` with its message |
+| `spec/system/pages/**`, `spec/requests/pages_spec.rb` | The tests for those pages — rewrite them with the pages |
 | `config/routes/app.rb` | Your product's routes (loaded by `draw(:app)`) |
 | `.rubocop/app.yml` | Your RuboCop overrides — turn a house cop off here, with the reason ([Getting started](getting-started#turning-a-house-cop-off-in-your-fork)) |
 | `config/markdowndocs_categories.local.yml` | Registers your own docs pages on this `/docs` index |
@@ -461,7 +472,8 @@ bin/sync
 
 If `next` already has the template's latest release, it says so and stops.
 It needs a clean working tree, an `upstream` remote (`bin/setup` adds it) and
-the GitHub CLI, signed in.
+the GitHub CLI, signed in. Like `bin/setup`, it points `gh` at your fork, not
+the template, so a clone set up before setup did that is fixed on its next sync.
 
 **A fork made before `bin/sync` existed doesn't have it yet.** Its first sync
 brings it in, so run that one from the template's copy. It needs the
@@ -521,7 +533,7 @@ and opens the PR.
 | ----------- | ---------- |
 | `CHANGELOG.md` | Never — `bin/sync` keeps yours before it stops |
 | Fork-owned paths | Shouldn't happen — the driver keeps yours. If it does, the driver isn't active: `git merge --abort`, run `git config merge.ours.driver true`, then `bin/sync` again |
-| Identity values (`config/deploy.yml` service/image/volumes, `config/application.rb` module) | Keep your names; take any structural changes around them |
+| Identity values (`config/deploy.yml` service/image/volumes, `SMTP_*`, `MAIL_FROM`, `RAILS_HOST`; `config/application.rb` module) | Keep your values; take any structural changes around them. Taking theirs on `SMTP_ADDRESS` puts the old host beside your new login, and the boot check can't see that |
 | `Gemfile` | Keep **both** sides' gems, then regenerate the lockfile |
 | `Gemfile.lock` | Never hand-merge: `git checkout --theirs Gemfile.lock`, then `bundle install`, commit the regenerated result |
 | Behavior (app code, specs, config) | Take theirs — unless you deliberately diverged, in which case consider sending your version upstream instead |

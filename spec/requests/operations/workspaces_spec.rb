@@ -74,7 +74,7 @@ RSpec.describe "Operations workspaces", type: :request do
       row = Capybara.string(response.body).find("tbody tr", text: "Acme")
       expect(row).to have_css("th[scope=row]", text: "Acme")
       expect(row.all("th, td").map { |cell| cell[:class] }).to all(include("whitespace-nowrap"))
-      expect(row).to have_css("td span[data-variant='soft'][aria-label='#{I18n.t("lifecycle_status.prefix")}: #{I18n.t("lifecycle_status.active")}']")
+      expect(row).to have_css("td span[data-variant='soft']", exact_text: "#{I18n.t("lifecycle_status.prefix")}: #{I18n.t("lifecycle_status.active")}")
     end
 
     # Membership#owner? has no kept test, so a discarded owner membership
@@ -161,7 +161,7 @@ RSpec.describe "Operations workspaces", type: :request do
       html = Capybara.string(response.body)
       header = html.find("main header")
       expect(header).to have_css("h1", text: "Acme")
-      expect(header).to have_css("span[data-variant='soft'][aria-label='#{I18n.t("lifecycle_status.prefix")}: #{I18n.t("lifecycle_status.active")}']")
+      expect(header).to have_css("span[data-variant='soft']", exact_text: "#{I18n.t("lifecycle_status.prefix")}: #{I18n.t("lifecycle_status.active")}")
       expect(html).to have_link(I18n.t("operations.workspaces.show.view_activity"),
         href: operations_activity_logs_path(workspace: workspace.slug))
       expect(html.all("h2").map(&:text).last).to eq(I18n.t("operations.workspaces.show.access"))

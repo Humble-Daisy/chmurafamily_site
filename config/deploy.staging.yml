@@ -5,9 +5,13 @@ servers:
     hosts:
       - 192.168.0.2
 
+# proxy:
+#   host: staging.yourdomain.com
+
 env:
   clear:
     RAILS_CREDENTIALS_ENV: staging
+    # RAILS_HOST: staging.yourdomain.com
 
 volumes:
   - "modelrails_base_staging_storage:/rails/storage"

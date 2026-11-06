@@ -25,7 +25,7 @@ RSpec.describe "Stimulus controller registration", type: :system do
   before { cdp_add_init_script(console_capture_js) }
 
   it "logs no console error on the signed-out landing page" do
-    visit "/"
+    visit new_session_path
 
     expect(console_errors).to be_empty
   end

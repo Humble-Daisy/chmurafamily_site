@@ -11,7 +11,7 @@ require "rails_helper"
 # see.
 RSpec.describe "Cookie consent banner accessibility", type: :system do
   it "passes AAA in both themes with no exclusions" do
-    visit "/"
+    visit new_session_path
     expect(page).to have_css(".biscuit-banner")
 
     expect(axe_clean_in_both_themes?(exclude: [])).to(
@@ -20,8 +20,17 @@ RSpec.describe "Cookie consent banner accessibility", type: :system do
     )
   end
 
+  it "exposes the preferences panel as a group named for what it manages" do
+    visit new_session_path
+    click_button I18n.t("biscuit.banner.manage")
+    expect(page).to have_css("#biscuit-preferences-panel", visible: true)
+
+    expect(ax_role("#biscuit-preferences-panel")).to eq("group")
+    expect(ax_name("#biscuit-preferences-panel")).to eq(I18n.t("biscuit.banner.manage"))
+  end
+
   it "is keyboard-operable: reject and accept are reachable, labeled buttons" do
-    visit "/"
+    visit new_session_path
 
     within(".biscuit-banner") do
       reject = find_button(I18n.t("cookie_consent.reject_non_essential"))

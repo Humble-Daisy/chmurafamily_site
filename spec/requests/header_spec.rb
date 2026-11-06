@@ -10,7 +10,7 @@ RSpec.describe "Header", type: :request do
       end
 
       it "has class `relative` so the absolutely-positioned indicator anchors to the button" do
-        get root_path
+        get workspaces_path
         doc = Nokogiri::HTML(response.body)
         button = doc.at_css('button[data-mobile-menu-target="button"]')
         expect(button).not_to be_nil, "hamburger button missing from header"
@@ -18,14 +18,14 @@ RSpec.describe "Header", type: :request do
       end
 
       it "renders the notifications_indicator_hamburger turbo-frame inside the button" do
-        get root_path
+        get workspaces_path
         doc = Nokogiri::HTML(response.body)
         button = doc.at_css('button[data-mobile-menu-target="button"]')
         expect(button.at_css('turbo-frame[id="notifications_indicator_hamburger"]')).not_to be_nil
       end
 
       it "renders the indicator dot with danger severity inside the hamburger frame" do
-        get root_path
+        get workspaces_path
         doc = Nokogiri::HTML(response.body)
         frame = doc.at_css('turbo-frame[id="notifications_indicator_hamburger"]')
         dot = frame.at_css('[data-severity="danger"]')
@@ -45,7 +45,7 @@ RSpec.describe "Header", type: :request do
       end
 
       it "renders the frame but no visible dot inside it (stable broadcast target)" do
-        get root_path
+        get workspaces_path
         doc = Nokogiri::HTML(response.body)
         frame = doc.at_css('turbo-frame[id="notifications_indicator_hamburger"]')
         expect(frame).not_to be_nil
@@ -55,7 +55,7 @@ RSpec.describe "Header", type: :request do
 
     context "unauthenticated user" do
       it "does not render the notifications indicator frame" do
-        get root_path
+        get new_session_path
         doc = Nokogiri::HTML(response.body)
         expect(doc.at_css('turbo-frame[id="notifications_indicator_hamburger"]')).to be_nil
       end

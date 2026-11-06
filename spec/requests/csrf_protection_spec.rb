@@ -35,10 +35,17 @@ RSpec.describe "CSRF protection by Sec-Fetch-Site", type: :request do
   it "rejects a POST with no Sec-Fetch-Site header over HTTPS even when it carries a valid token" do
     https!
     get new_session_path
-    token = Capybara.string(response.body).find("meta[name='csrf-token']", visible: :all)["content"]
+    token = Capybara.string(response.body).find("[data-biscuit-csrf-token-value]", visible: :all)["data-biscuit-csrf-token-value"]
+    expect(token).to be_present
     post session_lookup_path, params: { email_address: user.email_address, authenticity_token: token }
 
     expect(response).to have_http_status(:unprocessable_content)
+  end
+
+  it "renders no csrf-token meta tag, since no request is checked against one" do
+    get new_session_path
+
+    expect(response.body).not_to include('name="csrf-token"')
   end
 
   it "accepts a same-origin JSON POST to a passkey endpoint that carries no token, as webauthn_controller sends it" do

@@ -70,6 +70,21 @@ env:
   secret:
     - RAILS_MASTER_KEY
   clear:
+    # RAILS_HOST: app.yourdomain.com   # required; production refuses to boot without it
+
+    # Daily backups of the database and uploads, to a folder or a bucket: /docs/developer/deployment
+    # BACKUP_PATH: /backups               # the folder mounted under volumes: below
+
+    # BACKUP_SCHEDULE: every day at 2am   # any Solid Queue schedule
+
+    # OBJECT_STORAGE_BUCKET: yourapp-backups   # or a bucket, its key in credentials (object_storage.*)
+    # OBJECT_STORAGE_REGION: eu-central-003
+
+    # SIGNUP_MODE: open   # default: invite_only. Read Open sign-up in /docs/developer/deployment first
+
+    # WORKSPACE_ON_SIGNUP: shared   # must match the preset bin/fork set
+    # TENANCY_SHARED_WORKSPACE_SLUG: your_app   # production refuses to boot on shared without it
+
     # Outbound mail: the server here, its login in credentials (smtp.user_name, smtp.password).
     # Production refuses to boot without both. Recipes: /docs/developer/deployment.
     SMTP_ADDRESS: smtp.postmarkapp.com
@@ -119,6 +134,7 @@ aliases:
 # Recommended to change this to a mounted volume path that is backed up off server.
 volumes:
   - "modelrails_base_storage:/rails/storage"
+  # - "/srv/backups:/backups"   # the BACKUP_PATH folder, writable by uid 1000
 
 # Bridge fingerprinted assets, like JS and CSS, between versions to avoid
 # hitting 404 on in-flight requests. Combines all files from new and old

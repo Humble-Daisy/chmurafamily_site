@@ -15,13 +15,6 @@ RSpec.describe "Authenticated pages under :none onboarding (zero-workspace safet
     expect(user.personal_workspace).to be_nil
   end
 
-  describe "GET / (root / marketing home)" do
-    it "renders without a 500" do
-      get root_path
-      expect(response).to have_http_status(:ok)
-    end
-  end
-
   describe "GET /workspaces (index)" do
     it "renders without a 500" do
       get workspaces_path

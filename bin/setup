@@ -22,6 +22,9 @@ FileUtils.chdir APP_ROOT do
   puts "== Installing dependencies =="
   system("bundle check") || system!("bundle install")
 
+  puts "\n== Installing git hooks =="
+  system! "bundle exec lefthook install"
+
   # Fork seam: per-clone setup for downstream forks (see /docs/developer/forking).
   # bin/fork records the decisions once in .fork.yml; this applies them in every
   # clone. A teammate cloning an already-forked repo runs only bin/setup — they

@@ -22,6 +22,17 @@ RSpec.describe "Shared layout chrome", type: :request do
       expect(doc.at_css('a[href="#main-content"]')).not_to be_nil
       expect(doc.at_css('#notifications-live[aria-live="polite"]')).not_to be_nil
     end
+
+    it "subscribes to the stream NotificationBroadcaster sends the user's refreshes to" do
+      streams = []
+      allow(Turbo::StreamsChannel).to receive(:broadcast_update_to) { |stream, **| streams << stream }
+      NotificationBroadcaster.refresh_for(user, announcement_key: "notifications.bell.read_state_announcement")
+      broadcast_names = streams.uniq.map { |stream| Turbo::StreamsChannel.signed_stream_name(stream) }
+
+      subscribed = Nokogiri::HTML(response.body).css("turbo-cable-stream-source").map { |el| el["signed-stream-name"] }
+      expect(broadcast_names).not_to be_empty
+      expect(subscribed).to include(*broadcast_names)
+    end
   end
 
   context "application layout, no active workspace (workspaces index)" do
