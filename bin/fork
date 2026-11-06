@@ -148,8 +148,9 @@ class ForkFlow
     step_rename!
     step_preset!(@preset)
     step_verify!
+    @todos << "Set up outbound mail, which production requires: bin/mail-setup"
     print_summary!
-    offer_setup!
+    offer_mail_setup! if offer_setup!
   end
 
   # ------------------------------------------------------------------ naming
@@ -579,16 +580,29 @@ class ForkFlow
   # Only ever offered: --yes and non-TTY runs (CI, orchestrators) stay fast and
   # deterministic instead of silently carrying a full environment bootstrap.
   def offer_setup!
-    return unless interactive?
-    return unless ask("\nRun bin/setup now? (installs dependencies, prepares the database)", "Y").match?(/\A[Yy]/)
+    return false unless interactive?
+    return false unless ask("\nRun bin/setup now? (installs dependencies, prepares the database)", "Y").match?(/\A[Yy]/)
 
     say("\n== Running bin/setup ==")
     # --skip-server: bin/setup ends with `exec bin/dev`, which would replace this
     # process and start a server nobody asked for.
-    return if system(CLEAN_GIT_ENV, "bin/setup", "--skip-server", chdir: @root)
+    return true if system(CLEAN_GIT_ENV, "bin/setup", "--skip-server", chdir: @root)
 
     say("\n  ! bin/setup failed — but the fork itself is already committed, so there")
     say("    is nothing here to redo. Fix the setup problem and re-run bin/setup.")
+    false
+  end
+
+  def offer_mail_setup!
+    return unless interactive?
+
+    if ask("\nSet up outbound mail now?", "N").match?(/\A[Yy]/)
+      say("\n== Running bin/mail-setup ==")
+      return if system(CLEAN_GIT_ENV, "bin/mail-setup", chdir: @root)
+    end
+
+    say("\n  ! Mail isn't set up, so production will refuse to boot until it is.")
+    say("    Run bin/mail-setup when ready; development mail keeps working locally.")
   end
 
   def interactive? = !dry_run? && !@opts[:yes] && $stdin.tty?
