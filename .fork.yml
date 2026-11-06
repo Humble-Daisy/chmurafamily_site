@@ -1,0 +1,12 @@
+# Fork provenance — written by bin/fork. Do not gate on this file; live
+# state is derived from the repository. Committed so every clone inherits
+# the decisions: bin/setup reads `preset` into a teammate's .env, and
+# `template_baseline` answers "based on which template version?".
+---
+name: chmura_family
+product_name: Chmura Family
+preset: personal
+template_url: git@github.com:dschmura/modelrails_base.git
+template_baseline: c9503f85980a2c3d4fdf4fd4b8e87497d52e246b
+forked_at: '2026-11-06'
+fork_script_version: 1.0.0

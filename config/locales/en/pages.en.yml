@@ -38,11 +38,11 @@ en:
           button: "Go to your workspaces"
     about:
       hero:
-        title: "About ModelRails"
+        title: "About Chmura Family"
         subtitle: "A multi-tenant SaaS starter kit that lets you focus on what makes your app unique."
       mission:
         title: "Our mission"
-        description: "ModelRails eliminates the months of boilerplate work that every SaaS application requires. Authentication, multi-tenancy, authorization, invitations, real-time updates — it's all here, tested, and ready to customize."
+        description: "Chmura Family eliminates the months of boilerplate work that every SaaS application requires. Authentication, multi-tenancy, authorization, invitations, real-time updates — it's all here, tested, and ready to customize."
       features:
         title: "What's included"
         items:
@@ -72,7 +72,7 @@ en:
           description: "Clear seams for extension. Add your resource types, custom roles, and domain logic on a solid foundation."
     privacy:
       title: "Privacy Policy"
-      intro: "This privacy policy describes how ModelRails handles your information. We are committed to protecting your privacy and being transparent about our practices."
+      intro: "This privacy policy describes how Chmura Family handles your information. We are committed to protecting your privacy and being transparent about our practices."
       collection:
         title: "Information we collect"
         items:
@@ -113,7 +113,7 @@ en:
         email:
           title: "Email"
           description: "For general inquiries and support, write to %{address}."
-          address: "support@example.com"
+          address: "support@chmura_family.example"
         bugs:
           title: "Bug reports"
           description: "Found a bug? Report it on GitHub."
