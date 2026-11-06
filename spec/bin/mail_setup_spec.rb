@@ -1,0 +1,1088 @@
+require "rails_helper"
+require "io/console"
+require "io/wait"
+require "open3"
+require "pty"
+require "tmpdir"
+
+load Rails.root.join("bin/mail-setup")
+
+RSpec.describe MailSetup do
+  describe MailSetup::CredentialsText do
+    let(:login) { { user_name: "u", password: "p" } }
+
+    def parsed(text) = YAML.unsafe_load(text)
+
+    it "appends a block and keeps other keys and comments" do
+      after = described_class.with_login("# keep\nsecret_key_base: abc\n", **login)
+
+      expect(after).to include("# keep\n")
+      expect(parsed(after)).to eq("secret_key_base" => "abc", "smtp" => { "user_name" => "u", "password" => "p" })
+    end
+
+    it "replaces only the smtp block, leaving smtp_broadcast alone" do
+      before = "smtp:\n  user_name: old\n  password: old\nsmtp_broadcast:\n  password: other\n# tail\nz: 1\n"
+      after = described_class.with_login(before, **login)
+
+      expect(parsed(after).keys).to eq(%w[smtp smtp_broadcast z])
+      expect(parsed(after).dig("smtp", "user_name")).to eq("u")
+      expect(parsed(after).dig("smtp_broadcast", "password")).to eq("other")
+      expect(after).to include("# tail\n")
+    end
+
+    it "replaces an inline smtp value" do
+      after = described_class.with_login("smtp: {user_name: a, password: b}\nz: 1\n", **login)
+
+      expect(parsed(after)).to eq("smtp" => { "user_name" => "u", "password" => "p" }, "z" => 1)
+    end
+
+    it "doesn't duplicate the block on a second run" do
+      once = described_class.with_login("z: 1\n", **login)
+
+      expect(described_class.with_login(once, **login)).to eq(once)
+    end
+
+    it "starts the block on its own line when the text has no final newline" do
+      expect(parsed(described_class.with_login("z: 1", **login)).keys).to eq(%w[z smtp])
+    end
+
+    [ "abc #def", "*anchor", "yes", "12345", "{a: 1}", "!ruby/object:Object {}", "x\": y", "ünï" ].each do |value|
+      it "round-trips #{value.inspect} exactly" do
+        after = described_class.with_login("z: 1\n", user_name: value, password: value)
+
+        expect(parsed(after)["smtp"]).to eq("user_name" => value, "password" => value)
+      end
+    end
+
+    it "accepts a correct edit" do
+      before = "a: 1\n"
+
+      expect(described_class.safe_edit?(before, described_class.with_login(before, **login), **login)).to be(true)
+    end
+
+    it "accepts a correct edit of a file with an alias and a date" do
+      before = "base: &b\n  a: 1\ncopy: *b\nwhen: 2026-01-01\n"
+
+      expect(described_class.safe_edit?(before, described_class.with_login(before, **login), **login)).to be(true)
+    end
+
+    it "refuses an edit that changed another key" do
+      expect(described_class.safe_edit?("a: 1\n", %(a: 2\nsmtp:\n  user_name: "u"\n  password: "p"\n), **login)).to be(false)
+    end
+
+    it "refuses an edit that changed the value" do
+      after = %(a: 1\nsmtp:\n  user_name: "u"\n  password: p #q\n)
+
+      expect(described_class.safe_edit?("a: 1\n", after, user_name: "u", password: "p #q")).to be(false)
+    end
+
+    it "refuses text that doesn't parse" do
+      expect(described_class.safe_edit?("a: 1\n", "a: b: c\n", **login)).to be(false)
+    end
+  end
+
+  describe MailSetup::DeployFile do
+    let(:real) { Rails.root.join("config/deploy.yml").read }
+    let(:values) { { "SMTP_ADDRESS" => "email-smtp.us-east-1.amazonaws.com", "SMTP_PORT" => "587", "MAIL_FROM" => "hi@acme.example" } }
+    let(:mail_from_comment) { real.lines.grep(/# MAIL_FROM:/) }
+
+    def clear_values(text) = YAML.safe_load(text, aliases: true).dig("env", "clear")
+
+    it "sets all three values and keeps every other comment" do
+      after = described_class.with_values(real, values)
+
+      expect(clear_values(after)).to include("SMTP_ADDRESS" => values["SMTP_ADDRESS"], "SMTP_PORT" => 587, "MAIL_FROM" => "hi@acme.example")
+      expect(after.lines.grep(/^\s*#/)).to eq(real.lines.grep(/^\s*#/) - mail_from_comment)
+    end
+
+    it "leaves an existing MAIL_FROM alone when none is given" do
+      with_sender = described_class.with_values(real, values)
+      after = described_class.with_values(with_sender, values.except("MAIL_FROM").merge("SMTP_ADDRESS" => "smtp.example.org"))
+
+      expect(clear_values(after)).to include("MAIL_FROM" => "hi@acme.example", "SMTP_ADDRESS" => "smtp.example.org")
+    end
+
+    it "keeps the MAIL_FROM comment when no sender is given" do
+      expect(described_class.with_values(real, values.except("MAIL_FROM"))).to include(mail_from_comment.first)
+    end
+
+    it "inserts the port and sender directly after the address when they're absent" do
+      bare = "env:\n  clear:\n    SMTP_ADDRESS: old.example\n    OTHER: 1\n"
+      after = described_class.with_values(bare, values)
+
+      expect(after).to eq("env:\n  clear:\n    SMTP_ADDRESS: email-smtp.us-east-1.amazonaws.com\n    SMTP_PORT: 587\n    MAIL_FROM: hi@acme.example\n    OTHER: 1\n")
+    end
+
+    it "keeps a display name intact" do
+      after = described_class.with_values(real, values.merge("MAIL_FROM" => "Acme: Sales <hi@acme.example>"))
+
+      expect(clear_values(after)["MAIL_FROM"]).to eq("Acme: Sales <hi@acme.example>")
+    end
+
+    it "is editable only with an uncommented SMTP_ADDRESS under env.clear" do
+      expect(described_class.editable?(real)).to be(true)
+      expect(described_class.editable?("env:\n  clear:\n    # SMTP_ADDRESS: x\n")).to be(false)
+      expect(described_class.editable?("env:\n  secret:\n    - SMTP_ADDRESS\n")).to be(false)
+      expect(described_class.editable?("other:\n  SMTP_ADDRESS: x\n")).to be(false)
+      expect(described_class.editable?("")).to be(false)
+      expect(described_class.editable?(":bad: [")).to be(false)
+    end
+
+    it "reads the plain values under env.clear" do
+      expect(described_class.values(real)).to include("SMTP_ADDRESS" => "smtp.postmarkapp.com")
+      expect(described_class.values(":bad: [")).to eq({})
+    end
+
+    it "accepts a good edit" do
+      expect(described_class.safe_edit?(real, described_class.with_values(real, values), values)).to be(true)
+    end
+
+    it "refuses an edit that changed another value" do
+      before = "env:\n  clear:\n    SMTP_ADDRESS: a\n    OTHER: 1\n"
+      after = "env:\n  clear:\n    SMTP_ADDRESS: b\n    OTHER: 2\n"
+
+      expect(described_class.safe_edit?(before, after, { "SMTP_ADDRESS" => "b" })).to be(false)
+    end
+
+    it "refuses an edit that doesn't hold the answer" do
+      before = "env:\n  clear:\n    SMTP_ADDRESS: a\n"
+
+      expect(described_class.safe_edit?(before, before, { "SMTP_ADDRESS" => "b" })).to be(false)
+    end
+
+    it "refuses an edit that changed anything outside env.clear" do
+      before = "service: a\nenv:\n  clear:\n    SMTP_ADDRESS: a\n"
+      after = "service: b\nenv:\n  clear:\n    SMTP_ADDRESS: b\n"
+
+      expect(described_class.safe_edit?(before, after, { "SMTP_ADDRESS" => "b" })).to be(false)
+    end
+  end
+
+  describe MailSetup::ProductionCredentials do
+    let(:app) { build_app_fixture }
+    let(:credentials) { described_class.new(root: app.to_s) }
+    let(:login) { { user_name: "fake-u", password: "abc #def" } }
+    let(:touched_env) { %w[BUNDLE_GEMFILE BOOTSNAP_CACHE_DIR RAILS_MASTER_KEY RAILS_CREDENTIALS_ENV VISUAL] }
+
+    around do |example|
+      kept = ENV.to_h.slice(*touched_env)
+      ENV["BUNDLE_GEMFILE"] = Rails.root.join("Gemfile").to_s
+      ENV["BOOTSNAP_CACHE_DIR"] = Rails.root.join("tmp/cache").to_s
+      ENV.delete("RAILS_MASTER_KEY")
+      ENV.delete("RAILS_CREDENTIALS_ENV")
+      example.run
+    ensure
+      touched_env.each { |key| ENV[key] = kept[key] }
+    end
+
+    after { FileUtils.rm_rf(app.dirname) }
+
+    def build_app_fixture(name: "app")
+      root = Pathname.new(Dir.mktmpdir).join(name)
+      FileUtils.mkdir_p(root.join("bin"))
+      raise "fixture must be outside the checkout" if root.realpath.to_s.start_with?("#{Rails.root.realpath}/")
+
+      %w[config lib].each { |dir| FileUtils.cp_r(Rails.root.join(dir), root) }
+      FileUtils.rm_rf(root.join("config/credentials"))
+      FileUtils.rm_f([ root.join("config/master.key"), root.join("config/credentials.yml.enc") ])
+      %w[bin/rails bin/mail-setup .gitattributes .gitignore].each { |file| FileUtils.cp(Rails.root.join(file), root.join(file)) }
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "init", "-q", exception: true)
+      root
+    end
+
+    def raw_write(text)
+      env = CleanGitEnv::HASH.merge("VISUAL" => %(#{RbConfig.ruby} -e "File.write(ARGV[0], ENV.fetch('CONTENT'))"), "CONTENT" => text)
+      system(env, "bin/rails", "credentials:edit", "--environment", "production", chdir: app.to_s, out: File::NULL, err: File::NULL)
+    end
+
+    def show
+      IO.popen(CleanGitEnv::HASH, %w[bin/rails credentials:show --environment production], chdir: app.to_s, err: File::NULL, &:read)
+    end
+
+    it "creates credentials on a first run without printing anything" do
+      expect { expect(credentials.write_login(**login)).to be(true) }.not_to output.to_stdout_from_any_process
+
+      expect(app.join("config/credentials/production.key")).to exist
+      expect(app.join("config/credentials/production.yml.enc")).to exist
+      expect(credentials.login_matches?(**login)).to be(true)
+      expect(show).to include("secret_key_base")
+    end
+
+    it "works from a checkout path with a space" do
+      spaced = build_app_fixture(name: "my app")
+
+      expect(described_class.new(root: spaced.to_s).write_login(**login)).to be(true)
+    ensure
+      FileUtils.rm_rf(spaced.dirname)
+    end
+
+    it "reports a failed re-run, though Rails exits 0, and keeps the old login" do
+      credentials.write_login(**login)
+      failing = described_class.new(root: app.to_s)
+      allow(failing).to receive(:stand_in_command).and_return("false")
+
+      expect(failing.write_login(user_name: "new", password: "new")).to be(false)
+      expect(credentials.login_matches?(**login)).to be(true)
+    end
+
+    it "isn't redirected to staging by RAILS_CREDENTIALS_ENV" do
+      ENV["RAILS_CREDENTIALS_ENV"] = "staging"
+
+      expect(credentials.write_login(**login)).to be(true)
+      expect(app.join("config/credentials/production.yml.enc")).to exist
+      expect(app.join("config/credentials/staging.key")).not_to exist
+    end
+
+    it "tells a wrong key from invalid YAML" do
+      credentials.write_login(**login)
+      expect(described_class.new(root: app.to_s).readability).to eq(:readable)
+
+      key = app.join("config/credentials/production.key")
+      good = key.read
+      key.write("0" * 32)
+      expect(described_class.new(root: app.to_s).readability).to eq(:wrong_key)
+
+      key.write(good)
+      raw_write("smtp: bad: yaml: here\n")
+      expect(described_class.new(root: app.to_s).readability).to eq(:invalid_yaml)
+    end
+
+    it "reads a file with an alias and a date, as the app does" do
+      raw_write(%(base: &b\n  a: 1\ncopy: *b\nwhen: 2026-01-01\nmailer:\n  from: hi@acme.example\nsmtp:\n  user_name: "u"\n  password: "p"\n))
+
+      expect(credentials.readability).to eq(:readable)
+      expect(credentials.login_matches?(user_name: "u", password: "p")).to be(true)
+      expect(credentials.mailer_from).to eq("hi@acme.example")
+    end
+
+    it "stays consistent across a run when another fork's key is exported" do
+      ENV["RAILS_MASTER_KEY"] = "b" * 32
+      changes = MailSetup::KeyDecision.decide(root: app.to_s, env: ENV)
+      run = described_class.new(root: app.to_s, env: changes)
+
+      expect(run.write_login(**login)).to be(true)
+      expect(app.join("config/credentials/production.key")).to exist
+      expect(run.login_matches?(**login)).to be(true)
+    end
+
+    it "sees a missing login field" do
+      raw_write(%(smtp:\n  user_name: "u"\n))
+
+      expect(credentials.login?).to be(false)
+    end
+
+    context "with a recording bin/rails" do
+      let(:log) { app.join("rails.log") }
+
+      before do
+        FileUtils.mv(app.join("bin/rails"), app.join("bin/rails.real"))
+        app.join("bin/rails").write(<<~SHIM)
+          #!/usr/bin/env ruby
+          require "json"
+          secrets = #{[ login[:user_name], login[:password] ].inspect}
+          found = ENV.to_h.values.any? { |value| secrets.any? { |secret| value.include?(secret) } }
+          call = { argv: ARGV, visual: ENV["VISUAL"], redirected: ENV.key?("RAILS_CREDENTIALS_ENV"), secret_in_env: found }
+          File.write(#{log.to_s.inspect}, JSON.generate(call) + "\\n", mode: "a")
+          exec(File.expand_path("rails.real", __dir__), *ARGV)
+        SHIM
+        app.join("bin/rails").chmod(0o755)
+      end
+
+      def leaks(text, secrets) = secrets.select { |secret| text.include?(secret) }
+
+      it "keeps the login and key out of arguments, environment and deploy.yml" do
+        ENV["VISUAL"] = "decoy"
+        credentials.write_login(**login)
+        credentials.login_matches?(**login)
+        key = app.join("config/credentials/production.key").read.strip
+
+        calls = log.readlines.map { |line| JSON.parse(line) }
+        edit = calls.find { |call| call["argv"].first == "credentials:edit" }
+
+        expect(leaks(log.read + app.join("config/deploy.yml").read, [ login[:user_name], login[:password], key ])).to be_empty
+        expect(calls.map { |call| call["secret_in_env"] }).to all(be(false))
+        expect(edit["visual"]).to include("--write-login")
+        expect(edit["redirected"]).to be(false)
+      end
+
+      it "has a scanner that finds a planted secret" do
+        log.write("planted-sentinel")
+
+        expect(leaks(log.read, [ "planted-sentinel" ])).to eq([ "planted-sentinel" ])
+      end
+
+      it "has a shim that notices a login in the environment" do
+        ENV["PLANTED_LOGIN"] = login[:password]
+        credentials.write_login(**login)
+
+        expect(log.readlines.map { |line| JSON.parse(line)["secret_in_env"] }).to all(be(true))
+      ensure
+        ENV.delete("PLANTED_LOGIN")
+      end
+
+      it "doesn't record the parent's environment" do
+        ENV["PARENT_VALUE"] = "must-stay-out-of-the-log"
+        credentials.write_login(**login)
+
+        expect(log.read.include?("must-stay-out-of-the-log")).to be(false)
+      ensure
+        ENV.delete("PARENT_VALUE")
+      end
+    end
+  end
+
+  describe "bin/mail-setup --write-login" do
+    let(:dir) { Pathname.new(Dir.mktmpdir) }
+    let(:file) { dir.join("credentials.yml") }
+
+    after { FileUtils.rm_rf(dir) }
+
+    def stand_in(stdin)
+      Open3.capture3(RbConfig.ruby, Rails.root.join("bin/mail-setup").to_s, "--write-login", file.to_s, stdin_data: stdin)
+    end
+
+    it "writes the login when the edit is safe, printing nothing" do
+      file.write("a: 1\n")
+      out, err, status = stand_in(%({"user_name":"u","password":"p"}))
+
+      expect([ out, status.exitstatus ]).to eq([ "", 0 ])
+      expect(err.lines.grep(/\bp\b/)).to be_empty
+      expect(YAML.unsafe_load(file.read)["smtp"]).to eq("user_name" => "u", "password" => "p")
+    end
+
+    it "leaves a file it can't edit safely untouched, exits 1 and prints nothing" do
+      file.write("a: b: c\n")
+      out, _err, status = stand_in(%({"user_name":"FAKESECRET","password":"FAKESECRET"}))
+
+      expect(file.read).to eq("a: b: c\n")
+      expect([ out, status.exitstatus ]).to eq([ "", 1 ])
+    end
+
+    it "prints no value when its input is broken" do
+      file.write("a: 1\n")
+      out, err, status = stand_in("FAKESECRET not json")
+
+      expect(file.read).to eq("a: 1\n")
+      expect(status.exitstatus).to eq(1)
+      expect(out + err).not_to include("FAKESECRET")
+    end
+  end
+
+  describe MailSetup::KeyDecision do
+    let(:root) { Pathname.new(Dir.mktmpdir) }
+    let(:key_file) { root.join("config/credentials/production.key") }
+    let(:enc_file) { root.join("config/credentials/production.yml.enc") }
+    let(:no_history) { ->(_path) { false } }
+
+    before { FileUtils.mkdir_p(key_file.dirname) }
+    after { FileUtils.rm_rf(root) }
+
+    def decide(env: {}, history: no_history) = described_class.decide(root: root.to_s, env:, history:)
+
+    it "stops when the exported key differs from production.key, without printing either" do
+      key_file.write("a" * 32)
+      enc_file.write("x")
+
+      expect { decide(env: { "RAILS_MASTER_KEY" => "b" * 32 }) }.to raise_error(MailSetup::Stop) { |error|
+        expect(error.message).to include("unset RAILS_MASTER_KEY")
+        expect(error.message).not_to include("a" * 32, "b" * 32)
+      }
+    end
+
+    it "unsets an exported key when there's no credentials file yet" do
+      expect(decide(env: { "RAILS_MASTER_KEY" => "b" * 32 })).to eq("RAILS_MASTER_KEY" => nil)
+    end
+
+    it "uses an exported key when the file exists and there's no production.key" do
+      enc_file.write("x")
+
+      expect(decide(env: { "RAILS_MASTER_KEY" => "b" * 32 })).to eq({})
+    end
+
+    it "continues when the exported key matches production.key" do
+      key_file.write("#{"a" * 32}\n")
+      enc_file.write("x")
+
+      expect(decide(env: { "RAILS_MASTER_KEY" => "a" * 32 })).to eq({})
+    end
+
+    it "stops on a comma-separated key" do
+      expect { decide(env: { "RAILS_MASTER_KEY" => "#{"a" * 32},#{"b" * 32}" }) }
+        .to raise_error(MailSetup::Stop, /one key/)
+    end
+
+    it "stops when the file exists with no key at all, creating none" do
+      enc_file.write("x")
+
+      expect { decide }.to raise_error(MailSetup::Stop, /whoever set/)
+      expect(key_file).not_to exist
+    end
+
+    it "refuses when git history has a credentials file and the disk doesn't" do
+      expect { decide(history: ->(path) { path == MailSetup::ProductionCredentials::FILE }) }
+        .to raise_error(MailSetup::Stop, /git history/)
+    end
+
+    it "continues to a first run when there are no credentials anywhere" do
+      expect(decide).to eq({})
+    end
+
+    it "notices root credentials that a new production file would replace" do
+      root.join("config/credentials.yml.enc").write("x")
+
+      expect(described_class.replaces_root?(root: root.to_s)).to be(true)
+      enc_file.write("x")
+      expect(described_class.replaces_root?(root: root.to_s)).to be(false)
+    end
+
+    it "reads history through git, seeing a credentials file that was committed and removed" do
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "init", "-q", exception: true)
+      enc_file.write("x")
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "add", ".", exception: true)
+      system(CleanGitEnv::HASH, "git", "-C", root.to_s, "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "x", exception: true)
+      enc_file.delete
+
+      expect { described_class.decide(root: root.to_s, env: {}) }.to raise_error(MailSetup::Stop, /git history/)
+    end
+  end
+
+  describe MailSetup::Prompts do
+    let(:output) { StringIO.new }
+
+    def prompts(*answers)
+      input = StringIO.new(answers.join)
+      def input.noecho = yield(self)
+      described_class.new(input:, output:)
+    end
+
+    describe "#secret" do
+      it "says typing is hidden" do
+        prompts("tok\n").secret("Server API token")
+
+        expect(output.string).to include("Server API token", "typing is hidden")
+      end
+
+      it "strips what a paste brings along" do
+        expect(prompts("  tok-123 \n").secret("Token")).to eq("tok-123")
+      end
+
+      it "treats a bare Enter as declining" do
+        expect(prompts("\n").secret("Token")).to be_nil
+      end
+
+      it "treats the end of input as declining" do
+        expect(prompts.secret("Token")).to be_nil
+      end
+
+      it "asks again after whitespace alone" do
+        expect(prompts("   \n", "tok\n").secret("Token")).to eq("tok")
+      end
+
+      it "asks again after a space in the middle" do
+        expect(prompts("tok tok\n", "tok\n").secret("Token")).to eq("tok")
+      end
+
+      it "asks again after a control character" do
+        expect(prompts("to\ak\n", "tok\n").secret("Token")).to eq("tok")
+      end
+
+      it "asks again after invalid bytes, without raising or repeating them" do
+        expect(prompts("FAKE\xFF\n", "tok\n").secret("Token")).to eq("tok")
+        expect(output.string).not_to include("FAKE")
+      end
+
+      it "raises Declined on Ctrl-C" do
+        input = StringIO.new
+        def input.noecho = raise(Interrupt)
+
+        expect { described_class.new(input:, output:).secret("Token") }.to raise_error(MailSetup::Declined)
+      end
+    end
+
+    describe "#sender" do
+      it "refuses a value without an @" do
+        expect(prompts("nope\n", "hi@acme.example\n").sender(current: nil, logins: [])).to eq("hi@acme.example")
+      end
+
+      it "accepts a display name" do
+        expect(prompts("Acme <hi@acme.example>\n").sender(current: nil, logins: [])).to eq("Acme <hi@acme.example>")
+      end
+
+      it "returns nil for a blank answer, keeping the line" do
+        expect(prompts("\n").sender(current: "old@acme.example", logins: [])).to be_nil
+        expect(output.string).to include("old@acme.example")
+      end
+
+      it "refuses a pasted login without repeating it" do
+        expect(prompts("FAKE@TOKEN\n", "hi@acme.example\n").sender(current: nil, logins: [ "FAKE@TOKEN" ])).to eq("hi@acme.example")
+        expect(output.string).not_to include("FAKE@TOKEN")
+      end
+    end
+
+    describe "#address" do
+      it "refuses something that isn't a hostname" do
+        expect(prompts("bad host\n", "smtp.acme.example\n").address).to eq("smtp.acme.example")
+      end
+    end
+
+    describe "#port" do
+      it "refuses something that isn't a port" do
+        expect(prompts("abc\n", "99999\n", "2525\n").port).to eq("2525")
+      end
+
+      it "refuses 465 and says why" do
+        expect(prompts("465\n", "587\n").port).to eq("587")
+        expect(output.string).to include("STARTTLS")
+      end
+
+      it "defaults to 587" do
+        expect(prompts("\n").port).to eq("587")
+      end
+    end
+
+    describe "#region" do
+      it "refuses something that isn't an AWS region" do
+        expect(prompts("nope\n", "us-east-1\n").region).to eq("us-east-1")
+      end
+    end
+
+    describe "#choice" do
+      it "numbers the options and asks until one is picked" do
+        expect(prompts("9\n", "2\n").choice("Provider", %w[A B])).to eq("B")
+        expect(output.string).to include("1) A", "2) B")
+      end
+    end
+
+    describe "#confirm" do
+      it "takes the default on a bare Enter" do
+        expect(prompts("\n").confirm("Sure?", default: false)).to be(false)
+        expect(prompts("\n").confirm("Sure?", default: true)).to be(true)
+      end
+
+      it "reads a yes" do
+        expect(prompts("y\n").confirm("Sure?", default: false)).to be(true)
+      end
+
+      it "asks again after invalid bytes" do
+        expect(prompts("\xFF y\n", "y\n").confirm("Sure?", default: false)).to be(true)
+      end
+    end
+
+    it "raises Declined at the end of input on an echoed prompt" do
+      expect { prompts.choice("Provider", %w[A B]) }.to raise_error(MailSetup::Declined)
+    end
+  end
+
+  describe "hidden prompts in a real terminal" do
+    def script = Rails.root.join("bin/mail-setup").to_s
+
+    # Writes only once the prompt is up and echo is off, or after the wait runs out.
+    def drive(code, prompts, echo_off_wait: 10)
+      seen = +""
+      PTY.spawn(RbConfig.ruby, "-e", code) do |reader, writer, pid|
+        prompts.each_with_index do |prompt, index|
+          deadline = Time.now + 15
+          until seen.include?(prompt)
+            raise "no prompt #{prompt.inspect}" if Time.now > deadline
+
+            seen << reader.read_nonblock(4096, exception: false).to_s if reader.wait_readable(0.1)
+          end
+          wait_until = Time.now + echo_off_wait
+          sleep(0.005) while reader.echo? && Time.now < wait_until
+          yield(writer, index)
+        end
+        begin
+          loop { seen << reader.readpartial(4096) }
+        rescue Errno::EIO, EOFError
+          nil
+        end
+        Process.wait(pid)
+      end
+      seen
+    end
+
+    it "doesn't echo what's typed, at either of two prompts" do
+      code = %(load #{script.inspect}; p = MailSetup::Prompts.new; p.secret("First"); p.secret("Second"))
+      seen = drive(code, %w[First Second]) { |writer, index| writer.puts("TYPED#{index}") }
+
+      expect(seen).to include("First", "Second")
+      expect(seen).not_to include("TYPED0")
+      expect(seen).not_to include("TYPED1")
+    end
+
+    it "has a driver that catches a second prompt that echoes" do
+      code = %(require "io/console"; print "First "; $stdin.noecho(&:gets); print "Second "; $stdin.gets)
+      seen = drive(code, %w[First Second], echo_off_wait: 1) { |writer, index| writer.puts("TYPED#{index}") }
+
+      expect(seen).not_to include("TYPED0")
+      expect(seen).to include("TYPED1")
+    end
+
+    it "restores echo after Ctrl-C at a hidden prompt" do
+      code = <<~RUBY_CODE
+        load #{script.inspect}
+        begin
+          MailSetup::Prompts.new.secret("First")
+        rescue MailSetup::Declined
+          puts "declined, echo is #{'#'}{$stdin.echo?}"
+        end
+      RUBY_CODE
+      seen = drive(code, %w[First]) { |writer, _index| writer.write("\x03") }
+
+      expect(seen).to include("declined, echo is true")
+    end
+  end
+
+  describe "the flow" do
+    let(:root) { Pathname.new(Dir.mktmpdir) }
+    let(:output) { StringIO.new }
+    let(:env) { {} }
+    let(:deploy) { root.join("config/deploy.yml") }
+    let(:credentials) do
+      instance_double(MailSetup::ProductionCredentials, readability: :readable, login?: false, mailer_from: nil, write_login: true)
+    end
+
+    before do
+      FileUtils.mkdir_p(root.join("config/credentials"))
+      root.join("config/application.rb").write("module MyApp\nend\n")
+      FileUtils.cp(Rails.root.join("config/deploy.yml"), deploy)
+      git("init", "-q")
+      git("add", ".")
+      git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "x")
+      allow($stdin).to receive(:tty?).and_return(true)
+    end
+
+    after { FileUtils.rm_rf(root) }
+
+    def git(*args) = system(CleanGitEnv::HASH, "git", "-C", root.to_s, *args, exception: true)
+
+    def flow(*answers)
+      input = StringIO.new(answers.map { |answer| "#{answer}\n" }.join)
+      def input.noecho = yield(self)
+      described_class.new(root: root.to_s, prompts: MailSetup::Prompts.new(input:, output:), credentials:, env:, output:).tap do |setup|
+        allow(setup).to receive(:bundle_available?).and_return(true)
+      end
+    end
+
+    def clear = YAML.safe_load(deploy.read, aliases: true).dig("env", "clear")
+
+    describe "stopping before it asks anything" do
+      it "needs a terminal" do
+        allow($stdin).to receive(:tty?).and_return(false)
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("terminal")
+        expect(credentials).not_to have_received(:write_login)
+      end
+
+      it "needs the bundle" do
+        setup = flow
+        allow(setup).to receive(:bundle_available?).and_return(false)
+
+        expect(setup.run).to eq(1)
+        expect(output.string).to include("bin/setup")
+      end
+
+      it "needs a fork, and says to run bin/fork" do
+        root.join("config/application.rb").write("module ModelrailsBase\nend\n")
+        git("add", ".")
+        git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "y")
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("bin/fork")
+      end
+
+      it "proceeds on a renamed repo with no .fork.yml" do
+        expect(flow("1", "tok", "").run).to eq(0)
+      end
+
+      it "gives a wrong key its own sentence" do
+        allow(credentials).to receive_messages(readability: :wrong_key)
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("right key")
+        expect(output.string).not_to include("Choose")
+      end
+
+      it "gives invalid YAML its own sentence, naming the repair" do
+        allow(credentials).to receive_messages(readability: :invalid_yaml)
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+
+        expect(flow.run).to eq(1)
+        expect(output.string).to include("unset RAILS_MASTER_KEY", "bin/rails encrypted:edit config/credentials/production.yml.enc --key config/credentials/production.key")
+      end
+    end
+
+    describe "opening" do
+      it "says what's needed, and whether deploy.yml can be written, before asking" do
+        flow("1", "tok", "").run
+
+        expect(output.string.index("login")).to be < output.string.index("1) Postmark")
+        expect(output.string).to include("config/deploy.yml will be updated")
+      end
+
+      it "says when deploy.yml can't be written" do
+        deploy.delete
+        flow("1", "tok", "").run
+
+        expect(output.string).to include("set by hand")
+      end
+
+      it "changes nothing when the developer stops at the first question" do
+        before = deploy.read
+
+        expect(flow.run).to eq(1)
+        expect(deploy.read).to eq(before)
+        expect(credentials).not_to have_received(:write_login)
+      end
+    end
+
+    describe "providers" do
+      it "stores one Postmark token as both fields" do
+        flow("1", "tok", "").run
+
+        expect(credentials).to have_received(:write_login).with(user_name: "tok", password: "tok")
+        expect(clear).to include("SMTP_ADDRESS" => "smtp.postmarkapp.com", "SMTP_PORT" => 587)
+      end
+
+      it "builds the SES address from a region" do
+        flow("2", "us-east-1", "user", "pass", "hi@acme.example").run
+
+        expect(credentials).to have_received(:write_login).with(user_name: "user", password: "pass")
+        expect(clear).to include("SMTP_ADDRESS" => "email-smtp.us-east-1.amazonaws.com", "MAIL_FROM" => "hi@acme.example")
+      end
+
+      it "asks another server for its address and port, refusing 465" do
+        flow("3", "smtp.acme.example", "465", "2525", "user", "pass", "").run
+
+        expect(clear).to include("SMTP_ADDRESS" => "smtp.acme.example", "SMTP_PORT" => 2525)
+        expect(output.string).to include("STARTTLS")
+      end
+
+      it "refuses a pasted login as the sender" do
+        flow("2", "us-east-1", "user", "p@ss", "p@ss", "hi@acme.example").run
+
+        expect(clear["MAIL_FROM"]).to eq("hi@acme.example")
+      end
+    end
+
+    describe "when to ask for a login" do
+      it "requires one when the address changes, and writes nothing without it" do
+        allow(credentials).to receive_messages(login?: true)
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+        before = deploy.read
+
+        expect(flow("2", "us-east-1", "").run).to eq(1)
+        expect(deploy.read).to eq(before)
+        expect(credentials).not_to have_received(:write_login)
+      end
+
+      it "counts an address it can't read as changed" do
+        deploy.delete
+        allow(credentials).to receive(:login?).and_return(true)
+
+        expect(flow("1", "").run).to eq(1)
+        expect(credentials).not_to have_received(:write_login)
+      end
+
+      it "offers Replace login?, default No, when the address is unchanged and a login exists" do
+        allow(credentials).to receive(:login?).and_return(true)
+
+        expect(flow("1", "", "new@acme.example").run).to eq(0)
+        expect(output.string).to include("Replace login?")
+        expect(credentials).not_to have_received(:write_login)
+        expect(clear["MAIL_FROM"]).to eq("new@acme.example")
+      end
+
+      it "replaces the login on a yes" do
+        allow(credentials).to receive(:login?).and_return(true)
+
+        flow("1", "y", "new-token", "").run
+
+        expect(credentials).to have_received(:write_login).with(user_name: "new-token", password: "new-token")
+      end
+
+      it "asks when a field is missing, though the address is unchanged" do
+        allow(credentials).to receive(:login?).and_return(false)
+
+        flow("1", "tok", "").run
+
+        expect(output.string).not_to include("Replace login?")
+        expect(credentials).to have_received(:write_login)
+      end
+    end
+
+    it "asks before replacing root credentials, defaulting to No" do
+      root.join("config/credentials.yml.enc").write("x")
+
+      expect(flow("").run).to eq(1)
+      expect(output.string).to include("config/credentials.yml.enc")
+      expect(credentials).not_to have_received(:write_login)
+    end
+
+    it "leaves deploy.yml alone when the credentials write fails" do
+      allow(credentials).to receive(:write_login).and_return(false)
+      before = deploy.read
+
+      expect(flow("1", "tok", "").run).to eq(1)
+      expect(deploy.read).to eq(before)
+      expect(output.string).to include("deploy.yml wasn't touched")
+    end
+
+    describe "deploy.yml" do
+      it "still writes credentials when it can't be edited" do
+        deploy.write("service: x\n")
+
+        expect(flow("1", "tok", "").run).to eq(0)
+        expect(credentials).to have_received(:write_login)
+        expect(deploy.read).to eq("service: x\n")
+      end
+
+      it "keeps the file as it was, and exits 1, when its edit doesn't check out" do
+        before = deploy.read
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "tok", "").run).to eq(1)
+        expect(deploy.read).to eq(before)
+        expect(output.string).to include("SMTP_ADDRESS=smtp.postmarkapp.com")
+      end
+
+      it "doesn't say the login changed when it was kept and the edit failed" do
+        allow(credentials).to receive(:login?).and_return(true)
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "", "").run).to eq(1)
+        expect(output.string).not_to include("new login is saved")
+      end
+
+      it "says a new login is saved when the edit fails after writing one" do
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "tok", "").run).to eq(1)
+        expect(output.string).to include("new login is saved")
+      end
+
+      it "still gives the key backup when the edit fails on a first run" do
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+        root.join(".gitignore").write("config/credentials/*.key\n")
+        allow(MailSetup::DeployFile).to receive(:safe_edit?).and_return(false)
+
+        expect(flow("1", "tok", "").run).to eq(1)
+        expect(output.string).to include("password manager")
+      end
+    end
+
+    describe "swap warnings" do
+      before do
+        allow(credentials).to receive(:login?).and_return(true)
+        deploy.write(deploy.read.sub("# MAIL_FROM: hello@app.yourdomain.com", "MAIL_FROM: old@acme.example"))
+      end
+
+      it "warns that the sender's domain must be verified at the new provider" do
+        flow("2", "us-east-1", "user", "pass", "").run
+
+        expect(output.string).to include("old@acme.example", "verified at the new provider")
+      end
+
+      it "warns about a sender from mailer.from too" do
+        deploy.write(deploy.read.sub("MAIL_FROM: old@acme.example", "# MAIL_FROM: x"))
+        allow(credentials).to receive(:mailer_from).and_return("cred@acme.example")
+        flow("2", "us-east-1", "user", "pass", "").run
+
+        expect(output.string).to include("cred@acme.example", "verified at the new provider")
+      end
+
+      it "warns about staging when staging has its own credentials" do
+        root.join("config/credentials/staging.yml.enc").write("x")
+        flow("2", "us-east-1", "user", "pass", "").run
+
+        expect(output.string).to include("staging", "old login")
+      end
+
+      it "doesn't warn about staging for deploy.staging.yml alone" do
+        root.join("config/deploy.staging.yml").write("x: 1\n")
+
+        expect(flow("2", "us-east-1", "user", "pass", "").run).to eq(0)
+        expect(output.string).not_to include("old login")
+      end
+    end
+
+    it "shows the current address and sender on a re-run, and never the login" do
+      allow(credentials).to receive(:login?).and_return(true)
+      flow("1", "y", "SENTINEL-LOGIN", "").run
+
+      expect(output.string).to include("smtp.postmarkapp.com")
+      expect(output.string).not_to include("SENTINEL-LOGIN")
+    end
+
+    it "closes with what changed, the status and no login" do
+      flow("1", "SENTINEL-LOGIN", "hi@acme.example").run
+
+      expect(output.string).to include("Postmark: smtp.postmarkapp.com, sending as hi@acme.example", "git add config/deploy.yml\n")
+      expect(output.string).not_to include("SENTINEL-LOGIN")
+    end
+
+    it "uses the app's name and preset from .fork.yml" do
+      root.join(".fork.yml").write("name: my_app\npreset: shared\n")
+      root.join("config/credentials/production.yml.enc").write("x")
+      root.join("config/credentials/production.key").write("x")
+      flow("1", "tok", "").run
+
+      expect(output.string).to include('labelled "my_app"', "TENANCY_OWNER_EMAIL")
+    end
+
+    it "skips the key backup once the credentials file is committed" do
+      allow(credentials).to receive(:login?).and_return(true)
+
+      expect(flow("1", "", "").run).to eq(0)
+      expect(output.string).not_to include("password manager")
+    end
+
+    context "with a credentials file that was never committed" do
+      before do
+        root.join("config/credentials/production.yml.enc").write("x")
+        root.join("config/credentials/production.key").write("x")
+        root.join(".gitignore").write("config/credentials/*.key\n")
+        end
+
+      it "still asks for the key backup, because an interrupted first run left the file" do
+        flow("1", "tok", "").run
+
+        expect(output.string).to include("password manager", "git add config/credentials/production.yml.enc")
+      end
+    end
+
+    it "doesn't claim nothing was written when stopped during the write" do
+      allow(credentials).to receive(:write_login).and_raise(Interrupt)
+
+      expect(flow("1", "tok", "").run).to eq(1)
+      expect(output.string).not_to include("Nothing was written")
+      expect(output.string).to include("Run bin/mail-setup again")
+    end
+
+    it "does say nothing was written when stopped while asking" do
+      expect(flow("1").run).to eq(1)
+      expect(output.string).to include("Nothing was written")
+    end
+
+    it "prints a fixed sentence for an unexpected error, without its message" do
+      allow(credentials).to receive(:write_login).and_raise(StandardError, "FAKE-LOGIN in a message")
+
+      expect(flow("1", "tok", "").run).to eq(1)
+      expect(output.string).not_to include("FAKE-LOGIN")
+      expect(output.string).to include("stopped")
+    end
+  end
+
+  describe MailSetup::ClosingMessage do
+    let(:defaults) do
+      {
+        provider: "Postmark", address: "smtp.postmarkapp.com", port: "587", sender: "hello@example.org",
+        changed_files: %w[config/credentials/production.yml.enc config/deploy.yml .gitignore], first_run: true,
+        deploy_written: true, signup_mode: nil, preset: nil, preset_in_deploy: false, rails_host: nil,
+        master_key_set: false, app_name: "my_app", warnings: []
+      }
+    end
+
+    def text(**overrides) = described_class.text(**defaults, **overrides)
+
+    it "says everything the design asks for, in order" do
+      expected = [
+        "nothing has been sent yet",
+        "Postmark: smtp.postmarkapp.com, sending as hello@example.org",
+        "Do this now",
+        "git add config/credentials/production.yml.enc config/deploy.yml .gitignore",
+        "config/credentials/production.key", 'labelled "my_app"',
+        "git diff, git show, git log -p and git commit -v",
+        "Before you deploy",
+        "RAILS_HOST", "bin/rails db:encryption:init", "backup destination", "Production preflight",
+        "verified", "bin/deploy-guide",
+        "After you deploy",
+        "bin/kamal console", "User.create!", "an address with no account gets no email",
+        "bin/kamal logs", "5 links", "suppressed",
+        "SMTP_ADDRESS=smtp.postmarkapp.com", "SMTP_PORT=587", "MAIL_FROM=hello@example.org"
+      ]
+      positions = expected.map { |phrase| text.index(phrase) }
+
+      expect(positions).to all(be_an(Integer))
+      expect(positions).to eq(positions.sort)
+    end
+
+    it "drops the key backup when it isn't a first run" do
+      expect(text(first_run: false)).not_to include("password manager")
+    end
+
+    it "names only the files that changed, and numbers the steps in order" do
+      message = text(changed_files: %w[config/deploy.yml], first_run: false)
+
+      expect(message).to include("git add config/deploy.yml\n")
+      expect(message.scan(/^\s+(\d+)\. /).flatten.map(&:to_i)).to eq((1..message.scan(/^\s+\d+\. /).size).to_a)
+    end
+
+    it "skips the commit step when nothing changed" do
+      expect(text(changed_files: [], first_run: false)).not_to include("git add")
+    end
+
+    it "says so at the top when deploy.yml wasn't written" do
+      message = text(deploy_written: false)
+
+      expect(message.index("set the values at the end by hand")).to be < message.index("Do this now")
+    end
+
+    it "adds the SES sandbox step for SES alone" do
+      expect(text(provider: "Amazon SES")).to include("production access", "sandbox")
+      expect(text).not_to include("sandbox")
+    end
+
+    it "uses the seeded owner on the shared preset" do
+      message = text(preset: "shared", preset_in_deploy: true)
+
+      expect(message).to include("TENANCY_OWNER_EMAIL")
+      expect(message).not_to include("User.create!")
+    end
+
+    it "says to register under open sign-up, dropping the invite-only lines" do
+      message = text(signup_mode: "open")
+
+      expect(message).to include("Register")
+      expect(message).not_to include("User.create!", "an address with no account")
+    end
+
+    it "warns about an exported key under the status lines" do
+      message = text(master_key_set: true)
+
+      expect(message.index("unset RAILS_MASTER_KEY")).to be < message.index("Do this now")
+    end
+
+    it "warns when the preset isn't set in deploy.yml, naming shared's slug" do
+      expect(text(preset: "shared")).to include("WORKSPACE_ON_SIGNUP", "TENANCY_SHARED_WORKSPACE_SLUG")
+      expect(text(preset: "none")).to include("WORKSPACE_ON_SIGNUP")
+      expect(text(preset: "none")).not_to include("TENANCY_SHARED_WORKSPACE_SLUG")
+      expect(text(preset: "personal")).not_to include("WORKSPACE_ON_SIGNUP")
+      expect(text(preset: "shared", preset_in_deploy: true)).not_to include("WORKSPACE_ON_SIGNUP")
+    end
+
+    it "warns when the sender's domain doesn't fit RAILS_HOST" do
+      expect(text(rails_host: "app.acme.example", sender: "hi@other.example")).to include("doesn't match RAILS_HOST")
+      expect(text(rails_host: "app.acme.example", sender: "hi@acme.example")).not_to include("doesn't match")
+      expect(text(rails_host: "app.acme.example", sender: "Acme <hi@mail.app.acme.example>")).not_to include("doesn't match")
+      expect(text(rails_host: nil, sender: "hi@other.example")).not_to include("doesn't match")
+      expect(text(rails_host: "app.acme.example", sender: nil)).not_to include("doesn't match")
+    end
+
+    it "prints swap warnings under the status lines" do
+      message = text(warnings: [ "A swap warning." ])
+
+      expect(message.index("A swap warning.")).to be < message.index("Do this now")
+    end
+
+    it "leaves MAIL_FROM out of the platform values when no sender is set" do
+      expect(text(sender: nil)).not_to include("MAIL_FROM=")
+    end
+  end
+end
