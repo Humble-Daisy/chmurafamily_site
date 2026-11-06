@@ -29,7 +29,7 @@ gem "tailwindcss-rails"
 gem "bcrypt", "~> 3.1.7"
 
 # Auth: OAuth providers and password breach checking
-gem "webauthn", "~> 3.0"
+gem "webauthn", "~> 3.5"
 gem "omniauth"
 gem "omniauth-google-oauth2"
 gem "omniauth-github"
@@ -146,7 +146,7 @@ gem "lexxy", "~> 1.0"
 # Runtime dependency: the vendored app/components/ui/* are ViewComponents and are
 # loaded in production. This MUST stay a top-level gem — modelrails_ui (below) only
 # GENERATES the components in development and is excluded from production.
-gem "view_component", "~> 4.18"
+gem "view_component", "~> 4.20"
 
 # Runtime dependency of the vendored ApplicationComponent#cn helper: tailwind_merge
 # resolves conflicting Tailwind utilities so a per-instance `class:` passthrough
