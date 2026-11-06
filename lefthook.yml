@@ -70,7 +70,7 @@ pre-push:
       # The workflow audit's linter, offline here; CI adds the online checks. Same inputs as its paths.
       tags: style
       priority: 6
-      files: git diff --name-only origin/main...HEAD
+      files: bin/branch-changes
       glob: "{.github/**,mise.toml,mise.lock}"
       run: mise exec -- jactionlint
       skip:
@@ -90,9 +90,9 @@ pre-push:
         - rebase
     docker_build:
       tags: build
-      # Diffed against main, not the push range, so a rebase replay still builds.
+      # Diffed against the base branch, not the push range, so a rebase replay still builds.
       # Same inputs as docker_build.yml's paths.
-      files: git diff --name-only origin/main...HEAD
+      files: bin/branch-changes
       glob: "{Dockerfile,.dockerignore,Gemfile,Gemfile.lock,.tool-versions,bin/docker-entrypoint}"
       run: mise exec -- bin/docker-build-check
       skip:
@@ -101,8 +101,8 @@ pre-push:
     hotcell_build:
       tags: build
       priority: 8
-      # The Hot Cell image, built only when hotcell/ changed; diffed against main like docker_build.
-      files: git diff --name-only origin/main...HEAD
+      # The Hot Cell image, built only when hotcell/ changed; diffed like docker_build.
+      files: bin/branch-changes
       glob: "hotcell/**"
       run: docker build --pull hotcell
       skip:
